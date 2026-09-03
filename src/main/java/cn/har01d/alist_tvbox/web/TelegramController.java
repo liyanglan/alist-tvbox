@@ -19,12 +19,12 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import telegram4j.tl.User;
 
 import java.io.IOException;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 @Slf4j
 @RestController
@@ -44,36 +44,28 @@ public class TelegramController {
         this.objectMapper = objectMapper;
     }
 
-    @PostMapping("/api/telegram/reset")
-    public void reset() {
-        telegramService.reset();
-    }
-
-    @PostMapping("/api/telegram/login")
-    public void login() {
-        telegramService.connect();
-    }
-
-    @PostMapping("/api/telegram/logout")
-    public void logout() {
-        telegramService.logout();
-    }
-
     @GetMapping("/api/telegram/search")
     public List<Message> searchByKeyword(String wd) {
         return telegramService.search(wd, 100, false, false);
     }
 
+    @GetMapping("/api/telegram/tg-search/health")
+    public ObjectNode tgSearchHealth() {
+        return telegramService.getTgSearchHealth();
+    }
+
     @GetMapping("/tg-search")
-    public Object browse(String id, String t, String wd, boolean web, @RequestParam(required = false, defaultValue = "1") int pg) throws IOException {
-        return browse("", id, t, wd, web, pg);
+    public Object browse(String id, String t, String ac, String wd, String title, boolean web, @RequestParam(required = false, defaultValue = "1") int pg) throws IOException {
+        return browse("", id, t, ac, wd, title, web, pg);
     }
 
     @GetMapping("/tg-search/{token}")
-    public Object browse(@PathVariable String token, String id, String t, String wd, boolean web, @RequestParam(required = false, defaultValue = "1") int pg) throws IOException {
+    public Object browse(@PathVariable String token, String id, String t, String ac, String wd, String title, boolean web, @RequestParam(required = false, defaultValue = "1") int pg) throws IOException {
         subscriptionService.checkToken(token);
+        // 旧"我的追更"详情/列表/操作组通道(msub:{id}、t=msub、$msub$)已下线:TVBox 入口收敛到 csp_Media(/media/{token})。
+        // 原此处的 resolveUid(每请求一次用户查询)只服务那些已下线路径,一并移除
         if (StringUtils.isNotBlank(id)) {
-            return telegramService.detail(id);
+            return telegramService.detail(id, ac, title, wd);
         } else if (StringUtils.isNotBlank(t)) {
             if (t.equals("0")) {
                 return telegramService.searchMovies("", web, 5);
@@ -85,21 +77,42 @@ public class TelegramController {
         return telegramService.category(web);
     }
 
+    @GetMapping("/tgsc")
+    public Object browseTgSearch(String id, String t, String ac, String wd, String title, @RequestParam(required = false, defaultValue = "1") int pg, @RequestParam(required = false, defaultValue = "30") int size) {
+        return browseTgSearch("", id, t, ac, wd, title, pg, size);
+    }
+
+    @GetMapping("/tgsc/{token}")
+    public Object browseTgSearch(@PathVariable String token, String id, String t, String ac, String wd, String title, @RequestParam(required = false, defaultValue = "1") int pg, @RequestParam(required = false, defaultValue = "30") int size) {
+        subscriptionService.checkToken(token);
+        if (StringUtils.isNotBlank(id)) {
+            return telegramService.detail(id, ac, title, wd);
+        } else if (StringUtils.isNotBlank(t)) {
+            if (t.equals("0")) {
+                return telegramService.searchTgSearchMovies("", pg, 120);
+            }
+            return telegramService.listTgSearch(t, pg, size);
+        } else if (StringUtils.isNotBlank(wd)) {
+            return telegramService.searchTgSearchMovies(wd, pg, size);
+        }
+        return telegramService.categoryTgSearch();
+    }
+
     @GetMapping("/tg-db")
-    public Object db(String id, String t, String wd, String sort, Integer year, String genre, String region, @RequestParam(required = false, defaultValue = "1") int pg) throws IOException {
-        return db("", id, t, wd, sort, year, genre, region, pg);
+    public Object db(String id, String t, String ac, String wd, String title, String sort, Integer year, String genre, String region, @RequestParam(required = false, defaultValue = "1") int pg, @RequestParam(required = false, defaultValue = "30") int size) throws IOException {
+        return db("", id, t, ac, wd, title, sort, year, genre, region, pg, size);
     }
 
     @GetMapping("/tg-db/{token}")
-    public Object db(@PathVariable String token, String id, String t, String wd, String sort, Integer year, String genre, String region, @RequestParam(required = false, defaultValue = "1") int pg) throws IOException {
+    public Object db(@PathVariable String token, String id, String t, String ac, String wd, String title, String sort, Integer year, String genre, String region, @RequestParam(required = false, defaultValue = "1") int pg, @RequestParam(required = false, defaultValue = "30") int size) throws IOException {
         subscriptionService.checkToken(token);
         if (StringUtils.isNotBlank(id)) {
-            return telegramService.detail(id);
+            return telegramService.detail(id, ac, title, wd);
         } else if (StringUtils.isNotBlank(t)) {
             if (t.equals("0")) {
                 t = "suggestion";
             }
-            return telegramService.listDouban(t, sort, year, genre, region, pg);
+            return telegramService.listDouban(t, ac, sort, year, genre, region, pg, size);
         } else if (StringUtils.isNotBlank(wd)) {
             return telegramService.searchDouban(wd, 20);
         }
@@ -147,16 +160,6 @@ public class TelegramController {
         return telegramService.searchWeb(request.getKeyword(), request.getChannelUsername(), request.getEncode());
     }
 
-    @GetMapping("/api/telegram/user")
-    public User getUser() {
-        return telegramService.getUser();
-    }
-
-    @GetMapping("/api/telegram/chats")
-    public List<TelegramChannel> getAllChats() {
-        return telegramService.getAllChats();
-    }
-
     @GetMapping("/api/telegram/channels")
     public List<TelegramChannel> list() {
         return telegramService.list();
@@ -192,8 +195,4 @@ public class TelegramController {
         return telegramService.validateChannels();
     }
 
-    @GetMapping("/api/telegram/history")
-    public List<Message> getChatHistory(String id) {
-        return telegramService.getHistory(id);
-    }
 }

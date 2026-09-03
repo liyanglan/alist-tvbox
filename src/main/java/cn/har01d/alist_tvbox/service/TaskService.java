@@ -13,6 +13,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Example;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.jdbc.core.ConnectionCallback;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,8 +27,22 @@ import java.util.List;
 public class TaskService {
     private final TaskRepository taskRepository;
 
-    public TaskService(TaskRepository taskRepository) {
+    public TaskService(TaskRepository taskRepository, JdbcTemplate jdbcTemplate) {
         this.taskRepository = taskRepository;
+        String databaseProductName = jdbcTemplate.execute(
+                (ConnectionCallback<String>) connection -> connection.getMetaData().getDatabaseProductName());
+        jdbcTemplate.execute(summaryColumnTextSql(databaseProductName));
+    }
+
+    static String summaryColumnTextSql(String databaseProductName) {
+        String product = databaseProductName == null ? "" : databaseProductName.toLowerCase();
+        if (product.contains("mysql") || product.contains("mariadb")) {
+            return "ALTER TABLE task MODIFY COLUMN summary TEXT";
+        }
+        if (product.contains("postgresql")) {
+            return "ALTER TABLE task ALTER COLUMN summary TYPE TEXT";
+        }
+        return "ALTER TABLE task ALTER COLUMN summary TEXT";
     }
 
     @PostConstruct
@@ -72,6 +88,14 @@ public class TaskService {
         return taskRepository.save(task);
     }
 
+    public Task addIndex115Task() {
+        Task task = new Task();
+        task.setType(TaskType.DOWNLOAD);
+        task.setName("更新115索引");
+        task.setCreatedTime(Instant.now());
+        return taskRepository.save(task);
+    }
+
     public Task addScrapeTask(Site site) {
         Task task = new Task();
         task.setType(TaskType.SCRAPE);
@@ -92,6 +116,14 @@ public class TaskService {
         Task task = new Task();
         task.setType(TaskType.SYNC_META);
         task.setName("同步电影数据");
+        task.setCreatedTime(Instant.now());
+        return taskRepository.save(task);
+    }
+
+    public Task addSubscriptionTask(String name) {
+        Task task = new Task();
+        task.setType(TaskType.SUBSCRIPTION);
+        task.setName("追剧订阅 - " + name);
         task.setCreatedTime(Instant.now());
         return taskRepository.save(task);
     }

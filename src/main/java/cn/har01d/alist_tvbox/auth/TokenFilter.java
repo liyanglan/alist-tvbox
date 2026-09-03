@@ -4,12 +4,16 @@ import cn.har01d.alist_tvbox.domain.Role;
 import cn.har01d.alist_tvbox.entity.Setting;
 import cn.har01d.alist_tvbox.entity.SettingRepository;
 import cn.har01d.alist_tvbox.exception.UserUnauthorizedException;
+import cn.har01d.alist_tvbox.service.SubscriptionService;
+import cn.har01d.alist_tvbox.util.Constants;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -20,17 +24,47 @@ import org.springframework.util.StreamUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Base64;
 import java.util.Set;
 
 @Slf4j
 @Component
 public class TokenFilter extends OncePerRequestFilter {
     private final TokenService tokenService;
-    private final String apiKey;
+
+    @Lazy
+    @Autowired(required = false)
+    private SubscriptionService subscriptionService;
+    private volatile String apiKey;
+    private volatile String basicAuthCredentials;
 
     public TokenFilter(TokenService tokenService, SettingRepository settingRepository) {
         this.tokenService = tokenService;
         apiKey = settingRepository.findById("api_key").map(Setting::getValue).orElse("");
+        basicAuthCredentials = loadBasicAuthCredentials(settingRepository);
+    }
+
+    public void setApiKey(String apiKey) {
+        this.apiKey = apiKey;
+    }
+
+    public void setBasicAuthCredentials(String basicAuthCredentials) {
+        this.basicAuthCredentials = basicAuthCredentials;
+    }
+
+    private static String loadBasicAuthCredentials(SettingRepository settingRepository) {
+        String username = settingRepository.findById(Constants.BASIC_AUTH_USERNAME).map(Setting::getValue).orElse("");
+        String password = settingRepository.findById(Constants.BASIC_AUTH_PASSWORD).map(Setting::getValue).orElse("");
+        if (username.isEmpty() || password.isEmpty()) {
+            return null;
+        }
+        return encodeBasic(username, password);
+    }
+
+    static String encodeBasic(String username, String password) {
+        return "Basic " + Base64.getEncoder().encodeToString((username + ":" + password).getBytes(StandardCharsets.UTF_8));
     }
 
     @Override
@@ -38,7 +72,7 @@ public class TokenFilter extends OncePerRequestFilter {
         try {
             if (StringUtils.isNotBlank(apiKey)) {
                 String key = request.getHeader("X-API-KEY");
-                if (apiKey.equals(key)) {
+                if (key != null && MessageDigest.isEqual(apiKey.getBytes(StandardCharsets.UTF_8), key.getBytes(StandardCharsets.UTF_8))) {
                     Authentication authentication = new UsernamePasswordAuthenticationToken("client", key, Set.of(new SimpleGrantedAuthority(Role.CLIENT.name())));
                     SecurityContextHolder.getContext().setAuthentication(authentication);
                     filterChain.doFilter(request, response);
@@ -46,23 +80,57 @@ public class TokenFilter extends OncePerRequestFilter {
                 }
             }
 
-            if (request.getRequestURI().startsWith("/open") || request.getRequestURI().startsWith("/node") || request.getRequestURI().startsWith("/cat")) {
+            String uri = request.getRequestURI();
+            if (uri.startsWith("/open") || uri.startsWith("/node") || uri.startsWith("/cat")) {
                 String auth = request.getHeader("Authorization");
-                if (StringUtils.isBlank(auth) || !"Basic YWxpc3Q6YWxpc3Q=".equals(auth)) {
+                boolean ok = basicAuthCredentials != null && auth != null
+                        && MessageDigest.isEqual(basicAuthCredentials.getBytes(StandardCharsets.UTF_8), auth.getBytes(StandardCharsets.UTF_8));
+                if (!ok) {
+                    // 猫影视接口带 vod token(/node/{token}/... /open/{token}):合法 token 即鉴权放行。
+                    // 普通用户的 u- token 没有 basic auth 凭证(那是管理员全局凭证),控制器会再校验 token
+                    if (hasValidVodTokenInPath(uri)) {
+                        filterChain.doFilter(request, response);
+                        return;
+                    }
                     response.setHeader("Www-Authenticate", "Basic realm=\"alist\"");
                     response.sendError(401);
                     return;
                 }
-            } else {
-                String token = getToken(request);
-                if (StringUtils.isNotBlank(token)) {
+                // /open 不带路径 token 时,配置渲染会走无上下文分支:回落全局首个订阅 token 并注入全局
+                // master 凭证(getCurrentOrFirstToken/credentialAliAccount)。basic 凭证已下发给 USER
+                //(猫影视客户端要求内嵌),token 模式下放行无 token 的 /open 等于向 USER 递管理员凭证。
+                // 关闭 token 模式的单用户形态维持原行为(basic 凭证即门槛);/node 路由本身强制 {token} 段
+                if (isTokenlessOpen(uri) && subscriptionService != null && subscriptionService.isTokenEnabled()) {
+                    response.setHeader("Www-Authenticate", "Basic realm=\"alist\"");
+                    response.sendError(401);
+                    return;
+                }
+                filterChain.doFilter(request, response);
+                return;
+            }
+
+            String token = getToken(request);
+            if (StringUtils.isNotBlank(token)) {
+                try {
                     Authentication authentication = buildAuthentication(token);
                     SecurityContextHolder.getContext().setAuthentication(authentication);
+                } catch (UserUnauthorizedException e) {
+                    // 播放同步端点自带令牌鉴权:Authorization 里可能是播放令牌(或 Bearer 形式),
+                    // 不是会话令牌。此处不能提前 401,交给控制器按播放令牌解析。
+                    if (!PLAYBACK_SYNC_PATHS.contains(uri)) {
+                        throw e;
+                    }
+                    log.debug("非会话令牌,交由播放同步端点解析: {}", uri);
                 }
             }
             filterChain.doFilter(request, response);
         } catch (UserUnauthorizedException e) {
             sendError(response, e);
+        } finally {
+            SecurityContextHolder.clearContext();
+            if (subscriptionService != null) {
+                subscriptionService.clearRequestContext();
+            }
         }
     }
 
@@ -77,9 +145,49 @@ public class TokenFilter extends OncePerRequestFilter {
         }
     }
 
+    // 仅这些 GET 下载端点允许 query token(浏览器 window.location.href 无法设置 Authorization 头)
+    private static final Set<String> TOKEN_QUERY_DOWNLOAD_PATHS = Set.of(
+            "/api/settings/export", "/api/settings/export-json",
+            "/api/export-shares", "/api/logs/download", "/api/index-files/download",
+            "/api/static-files/download");
+
+    // permitAll 的播放同步端点:令牌即鉴权,由 PlaybackSyncController 解析(playback_token ∪ session)
+    private static final Set<String> PLAYBACK_SYNC_PATHS = Set.of(
+            "/api/playback/event", "/api/playback/events", "/api/playback/changes", "/api/playback/sync");
+
+    /**
+     * /node/{token}/... 与 /open/{token} 的路径第二段是 vod token:合法(共享 token 或 u- 用户 token)即放行。
+     * checkToken 同时会设置请求级 tenant/currentToken,控制器里会再走一遍,幂等。
+     */
+    private boolean hasValidVodTokenInPath(String uri) {
+        if (subscriptionService == null) {
+            return false;
+        }
+        String[] parts = uri.split("/");
+        if (parts.length < 3) {
+            return false;
+        }
+        if (!"node".equals(parts[1]) && !"open".equals(parts[1])) {
+            return false;
+        }
+        try {
+            subscriptionService.checkToken(parts[2]);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** /open 不带路径 token 的形态(仅 "/open" 与 "/open/";/node 路由本身强制 {token}/{file} 段)。 */
+    private static boolean isTokenlessOpen(String uri) {
+        return "/open".equals(uri) || "/open/".equals(uri);
+    }
+
     private String getToken(HttpServletRequest request) {
-        var token = request.getHeader("Authorization");
-        if (token == null || token.isEmpty()) {
+        String token = request.getHeader("Authorization");
+        if (StringUtils.isBlank(token)
+                && "GET".equalsIgnoreCase(request.getMethod())
+                && TOKEN_QUERY_DOWNLOAD_PATHS.stream().anyMatch(p -> request.getRequestURI().startsWith(p))) {
             token = request.getParameter("X-ACCESS-TOKEN");
         }
         return token;

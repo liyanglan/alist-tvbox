@@ -6,6 +6,10 @@
       <a href="https://github.com/power721/alist-tvbox" target="_blank">https://github.com/power721/alist-tvbox</a>
     </p>
     <p>
+      电脑客户端：
+      <a href="https://github.com/power721/atv-player" target="_blank">https://github.com/power721/atv-player</a>
+    </p>
+    <p>
       中文文档：<a href="https://har01d.cn/#/notes/alist-tvbox" target="_blank">https://har01d.cn/#/notes/alist-tvbox</a>
     </p>
     <p>
@@ -21,15 +25,15 @@
     </p>
     <p>
       Telegram：
-      <a href="https://t.me/alist_tvbox_group" target="_blank">https://t.me/alist_tvbox_group</a>
+      <a href="https://t.me/+Vlgs24ZZxiM1Yzc1" target="_blank">https://t.me/alist_tvbox_group</a>
     </p>
     <p>
       手动部署Docker版：
-      <code>docker run -d -p 4567:4567 -p 5344:80 -e ALIST_PORT=5344 -v /etc/xiaoya:/data --restart=always --name=xiaoya-tvbox haroldli/xiaoya-tvbox</code>
+      <code>docker run -d -p 4567:4567 -p 5344:80 -e ALIST_PORT=5344 -v /opt/alist-tvbox:/data --restart=always --name=xiaoya-tvbox haroldli/xiaoya-tvbox</code>
     </p>
     <p>
       手动部署Docker版：
-      <code>docker run -d -p 4567:4567 -p 5344:5244 -e ALIST_PORT=5344 -v /etc/atv:/data --restart=always --name=alist-tvbox haroldli/alist-tvbox</code>
+      <code>docker run -d -p 4567:4567 -p 5344:5244 -e ALIST_PORT=5344 -v /opt/alist-tvbox:/data --restart=always --name=alist-tvbox haroldli/alist-tvbox</code>
     </p>
     <p>
       一键部署(系统服务版)：

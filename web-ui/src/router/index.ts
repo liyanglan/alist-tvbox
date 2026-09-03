@@ -22,7 +22,10 @@ import SystemInfo from "@/views/SystemInfo.vue";
 import MetaView from "@/views/MetaView.vue";
 import TmdbView from "@/views/TmdbView.vue";
 import EmbyView from "@/views/EmbyView.vue";
+import JellyfinView from "@/views/JellyfinView.vue";
+import FeiniuView from "@/views/FeiniuView.vue";
 import LiveView from "@/views/LiveView.vue";
+import MediaSubscriptionsView from "@/views/MediaSubscriptionsView.vue";
 import VodApiView from "@/views/VodApiView.vue";
 import AclView from "@/views/AclView.vue";
 import UsersView from "@/views/UsersView.vue";
@@ -83,6 +86,18 @@ const router = createRouter({
       path: '/emby',
       name: 'emby',
       component: EmbyView,
+      meta: {auth: true}
+    },
+    {
+      path: '/jellyfin',
+      name: 'jellyfin',
+      component: JellyfinView,
+      meta: {auth: true}
+    },
+    {
+      path: '/feiniu',
+      name: 'feiniu',
+      component: FeiniuView,
       meta: {auth: true}
     },
     {
@@ -161,6 +176,12 @@ const router = createRouter({
       path: '/live',
       name: 'liveHome',
       component: LiveView,
+      meta: {auth: true}
+    },
+    {
+      path: '/media-subscriptions',
+      name: 'mediaSubscriptions',
+      component: MediaSubscriptionsView,
       meta: {auth: true}
     },
     {

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 // @ts-nocheck
 import {VueDraggable} from "vue-draggable-plus";
-import {onMounted, ref} from "vue";
+import {onMounted, onUnmounted, ref} from "vue";
 import axios from "axios";
-import {ElMessage} from "element-plus";
+import clipBorad from "vue-clipboard3";
+import {ElMessage, ElMessageBox} from "element-plus";
 import Sortable from "sortablejs";
 import {Check, Close} from "@element-plus/icons-vue";
+import {isPluginDragEnabledForUserAgent} from "@/utils/pluginDragSupport.mjs";
 
 interface Channel {
   id: number | null
@@ -21,19 +23,61 @@ interface Channel {
 }
 
 const cover = ref('')
+const playbackSyncEnabled = ref(false)
+const playbackSyncScope = ref('token')
+const playbackTokens = ref<any[]>([])
+const newPlaybackTokenName = ref('')
+const createdPlaybackToken = ref('')
 const tgChannels = ref('')
 const tgWebChannels = ref('')
 const tgSearch = ref('')
+const tgSearchApiKey = ref('')
+const tgSearchVersion = ref('')
+const tgSearchHealthError = ref('')
+const panCheckUrl = ref('')
+const panCheckTimeoutMs = ref<number | null>(null)
 const panSouUrl = ref('')
 const panSouSource = ref('all')
+const panSouChannels = ref('custom')
+const panSouAuthEnabled = ref(false)
+const panSouUsername = ref('')
+const panSouPassword = ref('')
+const panSouProjectChannelsCount = ref(0)
+const panSouBuiltinChannelsCount = ref(0)
+const panSouPluginCount = ref(0)
 const panSouPlugins = ref([])
+const panSouLinkCheckEnabled = ref(false)
+const panSouLinkCheckMaxCount = ref(300)
+const panSouLinkCheckTypes = ref<string[]>([])
+const panSouLinkCheckTypeOptions = [
+  {label: '百度网盘', value: 'baidu'},
+  {label: '阿里云盘', value: 'aliyun'},
+  {label: '夸克网盘', value: 'quark'},
+  {label: '天翼云盘', value: 'tianyi'},
+  {label: 'UC网盘', value: 'uc'},
+  {label: '移动云盘', value: 'mobile'},
+  {label: '115网盘', value: '115'},
+  {label: '迅雷网盘', value: 'xunlei'},
+  {label: '123网盘', value: '123'},
+]
+const panSouConc = ref<number | null>(null)
+const panSouRefresh = ref(false)
+const panSouRes = ref('merge')
+const panSouFilterInclude = ref('')
+const panSouFilterExclude = ref('')
+const resOptions = [
+  {label: '聚合', value: 'merge'},
+  {label: '仅结果', value: 'results'},
+  {label: '全部', value: 'all'},
+]
 const plugins = ref([])
 const tgSortField = ref('time')
 const tgTimeout = ref(3000)
 const channels = ref<Channel[]>([])
 const activeRows = ref<Channel[]>([])
-const tgDrivers = ref('9,10,5,7,8,3,2,0,6,1'.split(','))
-const tgDriverOrder = ref('9,10,5,7,8,3,2,0,6,1'.split(','))
+const defaultDriverOrder = '9,10,5,7,8,3,2,0,6,1,12,magnet,ed2k,video'.split(',')
+const tgDrivers = ref([...defaultDriverOrder])
+const tgDriverOrder = ref([...defaultDriverOrder])
 const formVisible = ref(false)
 const dialogTitle = ref('')
 const form = ref<Channel>({
@@ -61,6 +105,10 @@ const options = [
   {label: '迅雷', value: '2'},
   {label: '移动', value: '6'},
   {label: 'PikPak', value: '1'},
+  {label: '光鸭', value: '12'},
+  {label: '磁力', value: 'magnet'},
+  {label: 'ED2K', value: 'ed2k'},
+  {label: '视频', value: 'video'},
 ]
 
 const options2 = [
@@ -75,6 +123,7 @@ const options2 = [
   {label: '迅雷', value: 2},
   {label: '移动', value: 6},
   {label: 'PikPak', value: 1},
+  {label: '光鸭', value: 12},
 ]
 
 const orders = [
@@ -90,10 +139,54 @@ const sources = [
   {label: '插件', value: 'plugin'},
 ]
 
+const panSouChannelLists = [
+  {label: '自定义', value: 'custom'},
+  {label: '项目内置', value: 'project'},
+  {label: '盘搜内置', value: 'pansou'},
+]
+
 const activeName = ref('basic')
 
 const getTypeName = (id: number) => {
   return options2.find(e => e.value === id)?.label
+}
+
+const normalizeDriverOrder = (value: string) => {
+  const ids = value.split(',').map(e => e.trim()).filter(e => e)
+  defaultDriverOrder.forEach(e => {
+    if (!ids.includes(e)) {
+      ids.push(e)
+    }
+  })
+  return ids.map(e => {
+    return {
+      id: e,
+      name: options.find(o => o.value === e)?.label || e
+    }
+  })
+}
+
+const loadPanSouInfo = () => {
+  return axios.get('/api/pansou').then(({data}) => {
+    plugins.value = data.plugins || []
+    panSouPluginCount.value = data.plugin_count || plugins.value.length
+    panSouAuthEnabled.value = data.auth_enabled === true
+    panSouProjectChannelsCount.value = data.project_channels_count || 0
+    panSouBuiltinChannelsCount.value = data.channels_count || data.channels?.length || 0
+  })
+}
+
+const getPanSouChannelCount = (value: string) => {
+  if (value === 'custom') {
+    return channels.value.filter(e => e.enabled && e.valid).length
+  }
+  if (value === 'project') {
+    return panSouProjectChannelsCount.value
+  }
+  if (value === 'pansou') {
+    return panSouBuiltinChannelsCount.value
+  }
+  return 0
 }
 
 const updateTgTimeout = () => {
@@ -105,16 +198,51 @@ const updateTgTimeout = () => {
 const updateTgSearch = () => {
   axios.post('/api/settings', {name: 'tg_search', value: tgSearch.value}).then(({data}) => {
     tgSearch.value = data.value
-    ElMessage.success('更新成功')
+    axios.post('/api/settings', {name: 'tg_search_api_key', value: tgSearchApiKey.value}).then(() => {
+      checkTgSearchHealth(true)
+    })
+  })
+}
+
+const checkTgSearchHealth = (showMessage = false) => {
+  tgSearchVersion.value = ''
+  tgSearchHealthError.value = ''
+  if (!tgSearch.value) {
+    if (showMessage) {
+      ElMessage.success('更新成功')
+    }
+    return
+  }
+  axios.get('/api/telegram/tg-search/health').then(({data}) => {
+    tgSearchVersion.value = data.version || ''
+    if (showMessage) {
+      ElMessage.success(tgSearchVersion.value ? '校验成功' : '更新成功')
+    }
+  }).catch(() => {
+    tgSearchHealthError.value = '地址或API Key无效'
+    if (showMessage) {
+      ElMessage.error(tgSearchHealthError.value)
+    }
   })
 }
 
 const updatePanSouUrl = () => {
   axios.post('/api/settings', {name: 'pan_sou_url', value: panSouUrl.value}).then(({data}) => {
     panSouUrl.value = data.value
-    axios.get('/api/pansou').then(({data}) => {
-      plugins.value = data.plugins
-    })
+    loadPanSouInfo()
+    ElMessage.success('更新成功')
+  })
+}
+
+const updatePanCheckUrl = () => {
+  axios.post('/api/settings', {name: 'pan_check_url', value: panCheckUrl.value}).then(({data}) => {
+    panCheckUrl.value = data.value
+    ElMessage.success('更新成功')
+  })
+}
+
+const updatePanCheckTimeout = () => {
+  axios.post('/api/settings', {name: 'pan_check_timeout_ms', value: panCheckTimeoutMs.value || ''}).then(() => {
     ElMessage.success('更新成功')
   })
 }
@@ -125,10 +253,80 @@ const updatePanSouSource = () => {
   })
 }
 
+const updatePanSouChannels = () => {
+  axios.post('/api/settings', {name: 'pan_sou_channels', value: panSouChannels.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+
+const updatePanSouAuth = () => {
+  axios.post('/api/settings', {name: 'pan_sou_username', value: panSouUsername.value}).then()
+  axios.post('/api/settings', {name: 'pan_sou_password', value: panSouPassword.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+
+const updatePanSouLinkCheck = () => {
+  axios.post('/api/settings', {name: 'pan_sou_link_check_enabled', value: panSouLinkCheckEnabled.value}).then()
+  axios.post('/api/settings', {name: 'pan_sou_link_check_types', value: panSouLinkCheckTypes.value.join(',')}).then()
+  axios.post('/api/settings', {name: 'pan_sou_link_check_max_count', value: panSouLinkCheckMaxCount.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+
 const updateCover = () => {
   axios.post('/api/settings', {name: 'video_cover', value: cover.value}).then(({data}) => {
     cover.value = data.value
     ElMessage.success('更新成功')
+  })
+}
+
+const updatePlaybackSync = () => {
+  axios.post('/api/settings', {name: 'playback_sync_enabled', value: playbackSyncEnabled.value + ''}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+
+const updatePlaybackSyncScope = () => {
+  axios.post('/api/settings', {name: 'playback_sync_scope', value: playbackSyncScope.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+
+const loadPlaybackTokens = () => {
+  return axios.get('/api/playback/tokens').then(({data}) => {
+    playbackTokens.value = data
+  }).catch(() => {})
+}
+
+const createPlaybackToken = () => {
+  axios.post('/api/playback/tokens', {name: newPlaybackTokenName.value}).then(({data}) => {
+    createdPlaybackToken.value = data.token
+    newPlaybackTokenName.value = ''
+    ElMessage.success('令牌已生成,请立即复制')
+    loadPlaybackTokens()
+  }).catch(() => {})
+}
+
+const deletePlaybackToken = (row: any) => {
+  ElMessageBox.confirm(`删除令牌「${row.name || row.token}」?该令牌的客户端将无法同步。`, '提示', {type: 'warning'}).then(() => {
+    axios.delete(`/api/playback/tokens/${row.id}`).then(() => {
+      loadPlaybackTokens()
+    }).catch(() => {})
+  }).catch(() => {})
+}
+
+const formatTime = (value: string | number) => {
+  return new Date(value).toLocaleString('zh-cn')
+}
+
+const {toClipboard} = clipBorad()
+
+const copyToken = (text: string) => {
+  toClipboard(text).then(() => {
+    ElMessage.success('已复制')
+  }).catch(() => {
+    ElMessage.error('复制失败')
   })
 }
 
@@ -150,6 +348,16 @@ const updatePlugins = () => {
   })
 }
 
+const updatePanSouSearch = () => {
+  axios.post('/api/settings', {name: 'pan_sou_conc', value: panSouConc.value || ''}).then()
+  axios.post('/api/settings', {name: 'pan_sou_refresh', value: panSouRefresh.value}).then()
+  axios.post('/api/settings', {name: 'pan_sou_res', value: panSouRes.value}).then()
+  axios.post('/api/settings', {name: 'pan_sou_filter_include', value: panSouFilterInclude.value}).then()
+  axios.post('/api/settings', {name: 'pan_sou_filter_exclude', value: panSouFilterExclude.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+
 const updateOrder = () => {
   axios.post('/api/settings', {name: 'tg_sort_field', value: tgSortField.value}).then(() => {
     ElMessage.success('更新成功')
@@ -158,6 +366,8 @@ const updateOrder = () => {
 
 const changed = ref(false)
 const tableKey = ref(0)
+const channelDragEnabled = isPluginDragEnabledForUserAgent(window.navigator.userAgent)
+let channelSortable: Sortable | null = null
 
 const tableRowClassName = ({row}: {
   row: Channel
@@ -174,8 +384,14 @@ const treeToTile = (treeData: Channel[]) => {
 }
 
 const rowDrop = () => {
+  if (!channelDragEnabled) {
+    channelSortable?.destroy()
+    channelSortable = null
+    return
+  }
   const tbody = document.querySelector("#channels tbody") as HTMLElement;
-  Sortable.create(tbody, {
+  channelSortable?.destroy()
+  channelSortable = Sortable.create(tbody, {
     animation: 500,
     handle: ".el-table__row",
     draggable: ".el-table__row",
@@ -297,33 +513,48 @@ onMounted(() => {
   loadChannels().then(() => {
     rowDrop()
   })
+  loadPlaybackTokens()
   axios.get('/api/settings').then(({data}) => {
     tgChannels.value = data.tg_channels
     tgWebChannels.value = data.tg_web_channels
     tgSearch.value = data.tg_search
+    tgSearchApiKey.value = data.tg_search_api_key
+    panCheckUrl.value = data.pan_check_url
+    panCheckTimeoutMs.value = data.pan_check_timeout_ms ? +data.pan_check_timeout_ms : null
+    checkTgSearchHealth()
     panSouUrl.value = data.pan_sou_url
     if (panSouUrl.value) {
-      axios.get('/api/pansou').then(({data}) => {
-        plugins.value = data.plugins
-      })
+      loadPanSouInfo()
     }
+    panSouUsername.value = data.pan_sou_username
+    panSouPassword.value = data.pan_sou_password
     if (data.panSouPlugins && data.panSouPlugins.length) {
       panSouPlugins.value = data.panSouPlugins.split(',')
     }
     panSouSource.value = data.pan_sou_source || 'all'
+    panSouChannels.value = data.pan_sou_channels || 'custom'
+    panSouLinkCheckEnabled.value = data.pan_sou_link_check_enabled === 'true'
+    panSouLinkCheckMaxCount.value = +(data.pan_sou_link_check_max_count || 300)
+    panSouLinkCheckTypes.value = data.pan_sou_link_check_types ? data.pan_sou_link_check_types.split(',') : []
+    panSouConc.value = data.pan_sou_conc ? +data.pan_sou_conc : null
+    panSouRefresh.value = data.pan_sou_refresh === 'true'
+    panSouRes.value = data.pan_sou_res || 'merge'
+    panSouFilterInclude.value = data.pan_sou_filter_include || ''
+    panSouFilterExclude.value = data.pan_sou_filter_exclude || ''
     tgSortField.value = data.tg_sort_field || 'time'
-    tgDriverOrder.value = data.tgDriverOrder.split(',').map(e => {
-      return {
-        id: e,
-        name: options.find(o => o.value === e)?.label
-      }
-    })
+    tgDriverOrder.value = normalizeDriverOrder(data.tgDriverOrder || '')
     if (data.tg_drivers && data.tg_drivers.length) {
       tgDrivers.value = data.tg_drivers.split(',')
     }
     cover.value = data.video_cover
+    playbackSyncEnabled.value = data.playback_sync_enabled === 'true'
+    playbackSyncScope.value = data.playback_sync_scope || 'token'
     tgTimeout.value = +data.tg_timeout
   })
+})
+
+onUnmounted(() => {
+  channelSortable?.destroy()
 })
 </script>
 
@@ -331,44 +562,55 @@ onMounted(() => {
   <el-tabs v-model="activeName" class="demo-tabs">
     <el-tab-pane label="基本配置" name="basic">
       <el-form label-width="140">
-        <el-form-item label="远程搜索地址">
-          <el-input v-model="tgSearch" placeholder="http://IP:7856"/>
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="updateTgSearch">更新</el-button>
-          <a class="hint" target="_blank" href="https://t.me/alist_tvbox/711">部署</a>
-        </el-form-item>
         <el-form-item label="搜索超时时间">
           <el-input-number v-model="tgTimeout" :min="500" :max="30000"/>&nbsp;毫秒
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="updateTgTimeout">更新</el-button>
         </el-form-item>
-        <el-form-item label="PanSou地址">
-          <el-input v-model="panSouUrl" placeholder="http://IP:8888"/>
+        <el-form-item label="TG-Search地址">
+          <el-input v-model="tgSearch" placeholder="http://IP:9900"/>
+        </el-form-item>
+        <el-form-item label="TG-Search API Key">
+          <el-input v-model="tgSearchApiKey" type="password" show-password/>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="updatePanSouUrl">更新</el-button>
-          <a class="hint" target="_blank" href="https://github.com/fish2018/pansou">部署</a>
+          <el-button type="primary" @click="updateTgSearch">更新并校验</el-button>
+          <a class="hint" target="_blank" title="部署TG-Search" href="https://github.com/power721/tg-search">部署</a>
+          <span class="hint" v-if="tgSearchVersion">版本：{{ tgSearchVersion }}</span>
+          <span class="hint error" v-if="tgSearchHealthError">{{ tgSearchHealthError }}</span>
         </el-form-item>
-        <el-form-item label="PanSou数据源" v-if="panSouUrl">
-          <el-radio-group v-model="panSouSource" class="ml-4">
-            <el-radio size="large" v-for="item in sources" :key="item.value" :value="item.value">
-              {{ item.label }}
-            </el-radio>
-          </el-radio-group>
+        <el-form-item label="盘检地址">
+          <el-input v-model="panCheckUrl" placeholder="http://IP:6080"/>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="updatePanSouSource" v-if="panSouUrl">更新</el-button>
+          <el-button type="primary" @click="updatePanCheckUrl">更新</el-button>
+          <a class="hint" target="_blank" title="部署PanCheck" href="https://github.com/Lampon/PanCheck">部署</a>
+          <span class="hint">独立的网盘链接检测后端，配置后优先使用；检测优先级：盘检地址 &gt; TG-Search &gt; PanSou，留空则回退</span>
         </el-form-item>
-        <el-form-item label="PanSou插件" v-if="panSouUrl">
-          <el-checkbox-group v-model="panSouPlugins">
-            <el-checkbox v-for="item in plugins" :label="item" :value="item" :key="item"/>
+        <el-form-item label="盘检超时(ms)">
+          <el-input-number v-model="panCheckTimeoutMs" :min="0" :step="1000" placeholder="默认5000"/>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="updatePanCheckTimeout">更新</el-button>
+          <span class="hint">仅在走 TG-Search 盘检时作为 timeout_ms 生效，0/留空用上游默认（PanCheck/PanSou 无此参数）</span>
+        </el-form-item>
+        <el-form-item label="链接检测" v-if="panSouUrl">
+          <el-switch v-model="panSouLinkCheckEnabled"/>
+          <span class="hint">自动检查盘搜搜索结果的有效性</span>
+        </el-form-item>
+        <el-form-item label="检测网盘类型" v-if="panSouUrl">
+          <el-checkbox-group v-model="panSouLinkCheckTypes">
+            <el-checkbox v-for="t in panSouLinkCheckTypeOptions" :key="t.value" :label="t.label" :value="t.value"/>
           </el-checkbox-group>
+          <span class="hint">留空=检测全部9种</span>
+        </el-form-item>
+        <el-form-item label="检测数量上限" v-if="panSouUrl">
+          <el-input-number v-model="panSouLinkCheckMaxCount" :min="0" :max="1000"/>
+          <span class="hint">仅当网盘结果数量小于等于该值时检查，磁力和ED2K不计算数量</span>
         </el-form-item>
         <el-form-item v-if="panSouUrl">
-          <el-button type="primary" @click="updatePlugins">更新</el-button>
-          <span class="hint">留空使用全部插件搜索</span>
+          <el-button type="primary" @click="updatePanSouLinkCheck">更新</el-button>
         </el-form-item>
         <el-form-item label="网盘顺序">
           <el-checkbox-group v-model="tgDrivers">
@@ -400,9 +642,129 @@ onMounted(() => {
         </el-form-item>
       </el-form>
     </el-tab-pane>
+    <el-tab-pane label="同步配置" name="playback">
+      <el-form label-width="140">
+        <el-form-item label="播放记录同步">
+          <el-switch v-model="playbackSyncEnabled" @change="updatePlaybackSync"/>
+          <span class="hint">在影视、默影视和 atv-player 之间同步最近的播放记录</span>
+        </el-form-item>
+        <el-form-item label="同步分区" v-if="playbackSyncEnabled">
+          <el-select v-model="playbackSyncScope" @change="updatePlaybackSyncScope" style="width: 200px">
+            <el-option label="全局互通" value="uid"/>
+            <el-option label="按 VOD Token" value="token"/>
+            <el-option label="按订阅地址(逐个隔离)" value="subscription"/>
+          </el-select>
+          <span class="hint">仅 VOD Token 相同的订阅互相同步;关闭 VOD Token 时按用户互通</span>
+        </el-form-item>
+        <el-form-item label="同步令牌">
+          <div v-if="playbackTokens.length === 0" class="hint">
+            暂无令牌。生成后填入 Fish/默影视(Webhook/远端同步)或同步爬虫的 Token 配置。
+          </div>
+          <el-table v-else :data="playbackTokens" size="small" border class="no-hover" style="width: 100%">
+            <el-table-column prop="name" label="名称" min-width="120"/>
+            <el-table-column prop="token" label="令牌" min-width="240">
+              <template #default="{ row }">
+                <span class="token-text">{{ row.token }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="最近使用" min-width="160">
+              <template #default="{ row }">{{ row.lastUsedAt ? formatTime(row.lastUsedAt) : '—' }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="80">
+              <template #default="{ row }">
+                <el-button size="small" type="danger" link @click="deletePlaybackToken(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-form-item>
+        <el-form-item label="新令牌">
+          <el-input v-model="newPlaybackTokenName" placeholder="名称(可选)" style="width: 200px"/>
+          <el-button type="primary" @click="createPlaybackToken">生成</el-button>
+        </el-form-item>
+        <el-form-item v-if="createdPlaybackToken" label="已生成">
+          <el-input v-model="createdPlaybackToken" readonly type="password" show-password style="width: 320px"/>
+          <el-button type="primary" link @click="copyToken(createdPlaybackToken)">复制</el-button>
+          <span class="hint">仅显示一次,请立即复制保存。</span>
+        </el-form-item>
+      </el-form>
+    </el-tab-pane>
+    <el-tab-pane label="盘搜配置" name="pansou">
+      <el-form label-width="140">
+        <el-form-item label="PanSou地址">
+          <el-input v-model="panSouUrl" placeholder="http://IP:8888"/>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="updatePanSouUrl">更新</el-button>
+          <a class="hint" target="_blank" title="部署纯后端" href="https://github.com/fish2018/pansou">部署</a>
+          <a class="hint" target="_blank" title="部署前端后端" href="https://github.com/fish2018/pansou-web">部署</a>
+        </el-form-item>
+        <el-form-item label="PanSou用户名" v-if="panSouUrl && panSouAuthEnabled">
+          <el-input v-model="panSouUsername"/>
+        </el-form-item>
+        <el-form-item label="PanSou密码" v-if="panSouUrl && panSouAuthEnabled">
+          <el-input v-model="panSouPassword" type="password" show-password/>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="updatePanSouAuth" v-if="panSouUrl && panSouAuthEnabled">更新</el-button>
+        </el-form-item>
+        <el-form-item label="PanSou数据源" v-if="panSouUrl">
+          <el-radio-group v-model="panSouSource" class="ml-4">
+            <el-radio size="large" v-for="item in sources" :key="item.value" :value="item.value">
+              {{ item.label }}
+            </el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="updatePanSouSource" v-if="panSouUrl">更新</el-button>
+        </el-form-item>
+        <el-form-item label="PanSou频道列表" v-if="panSouUrl">
+          <el-radio-group v-model="panSouChannels" class="ml-4">
+            <el-radio size="large" v-for="item in panSouChannelLists" :key="item.value" :value="item.value">
+              {{ item.label }}({{ getPanSouChannelCount(item.value) }})
+            </el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" @click="updatePanSouChannels" v-if="panSouUrl">更新</el-button>
+        </el-form-item>
+        <el-form-item label="PanSou插件" v-if="panSouUrl">
+          <el-checkbox-group v-model="panSouPlugins">
+            <el-checkbox v-for="item in plugins" :label="item" :value="item" :key="item"/>
+          </el-checkbox-group>
+        </el-form-item>
+        <el-form-item v-if="panSouUrl">
+          <el-button type="primary" @click="updatePlugins">更新</el-button>
+          <span class="hint">已启用插件 {{ panSouPluginCount }} 个</span>
+          <span class="hint">留空使用全部插件搜索</span>
+        </el-form-item>
+        <el-form-item label="并发数" v-if="panSouUrl">
+          <el-input-number v-model="panSouConc" :min="0" placeholder="自动"/>
+          <span class="hint">留空或 0 使用上游自动并发（频道数+插件数+10）</span>
+        </el-form-item>
+        <el-form-item label="强制刷新" v-if="panSouUrl">
+          <el-switch v-model="panSouRefresh"/>
+          <span class="hint">跳过缓存，获取最新数据</span>
+        </el-form-item>
+<!--        <el-form-item label="结果类型" v-if="panSouUrl">-->
+<!--          <el-select v-model="panSouRes" style="width: 160px">-->
+<!--            <el-option v-for="item in resOptions" :key="item.value" :label="item.label" :value="item.value"/>-->
+<!--          </el-select>-->
+<!--        </el-form-item>-->
+        <el-form-item label="包含词" v-if="panSouUrl">
+          <el-input v-model="panSouFilterInclude" placeholder="多个用逗号分隔，如 1080,4K"/>
+        </el-form-item>
+        <el-form-item label="排除词" v-if="panSouUrl">
+          <el-input v-model="panSouFilterExclude" placeholder="多个用逗号分隔，如 枪版,广告"/>
+        </el-form-item>
+        <el-form-item v-if="panSouUrl">
+          <el-button type="primary" @click="updatePanSouSearch">更新</el-button>
+          <span class="hint">并发数/强制刷新/结果类型/包含词/排除词</span>
+        </el-form-item>
+      </el-form>
+    </el-tab-pane>
     <el-tab-pane label="频道管理" name="second">
       <el-row justify="end">
-        <span style="margin-right: 16px">可以拖动行排序</span>
+        <span style="margin-right: 16px" v-if="channelDragEnabled">可以拖动行排序</span>
         <el-button @click="loadChannels">刷新</el-button>
         <el-popconfirm @confirm="reload" title="是否从配置文件加载全部频道？">
           <template #reference>
@@ -422,7 +784,7 @@ onMounted(() => {
                 style="width: 100%">
         <el-table-column prop="order" label="顺序" width="60">
           <template #default="scope">
-            <span class="pointer">{{ scope.row.order }}</span>
+            <span :class="channelDragEnabled ? 'pointer' : 'order-text'">{{ scope.row.order }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="id" label="ID" width="120"/>
@@ -538,5 +900,17 @@ onMounted(() => {
 
 .pointer {
   cursor: pointer;
+}
+
+.order-text {
+  cursor: default;
+}
+
+.token-text {
+  word-break: break-all;
+}
+
+::v-deep .no-hover.el-table--enable-row-hover .el-table__body tr:hover > td {
+  background-color: transparent;
 }
 </style>

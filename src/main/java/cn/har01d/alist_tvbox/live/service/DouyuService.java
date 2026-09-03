@@ -9,11 +9,12 @@ import cn.har01d.alist_tvbox.tvbox.CategoryList;
 import cn.har01d.alist_tvbox.tvbox.MovieDetail;
 import cn.har01d.alist_tvbox.tvbox.MovieList;
 import cn.har01d.alist_tvbox.util.Constants;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.text.StringEscapeUtils;
-import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.boot.restclient.RestTemplateBuilder;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -27,8 +28,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -102,7 +101,7 @@ public class DouyuService implements LivePlatform {
     }
 
     @Override
-    public MovieList list(String id, String sort, Integer pg) throws IOException {
+    public MovieList list(String id, String ac, String sort, Integer pg) throws IOException {
         MovieList result = new MovieList();
         List<MovieDetail> list = new ArrayList<>();
 
@@ -178,17 +177,15 @@ public class DouyuService implements LivePlatform {
         String[] parts = tid.split("\\$");
         String id = parts[1];
         MovieList result = new MovieList();
-        String url = "http://open.douyucdn.cn/api/RoomApi/room/" + id;
-        var response = restTemplate.getForObject(url, DouyuRoomResponse.class);
-        var room = response.getData();
         MovieDetail detail = new MovieDetail();
         detail.setVod_id(tid);
-        detail.setVod_name(room.getRoom_name());
-        detail.setVod_pic(room.getRoom_thumb());
-        detail.setVod_actor(room.getOwner_name());
-        detail.setType_name(room.getCate_name());
-        detail.setVod_remarks(playCount(room.getOnline()));
-        parseUrl(detail, id);
+        if (getRoomDetailByBetard(detail, id)) {
+            // betard 官方接口:room.videoLoop==1 是轮播录播间,能取到流但不是真直播,须显式标注
+            parseUrl(detail, id);
+        } else {
+            getRoomDetailByOpenApi(detail, id);
+            parseUrl(detail, id);
+        }
         result.getList().add(detail);
 
         result.setTotal(result.getList().size());
@@ -197,32 +194,69 @@ public class DouyuService implements LivePlatform {
         return result;
     }
 
+    /** betard 元数据解析失败时回退的第三方开放接口(open.douyucdn.cn),无录播标记。 */
+    private void getRoomDetailByOpenApi(MovieDetail detail, String id) {
+        String url = "http://open.douyucdn.cn/api/RoomApi/room/" + id;
+        var response = restTemplate.getForObject(url, DouyuRoomResponse.class);
+        var room = response.getData();
+        detail.setVod_name(room.getRoom_name());
+        detail.setVod_pic(room.getRoom_thumb());
+        detail.setVod_actor(room.getOwner_name());
+        detail.setType_name(room.getCate_name());
+        detail.setVod_remarks(playCount(room.getOnline()));
+    }
+
+    /** 官方 web 端 betard 接口,唯一带 videoLoop 轮播标记的元数据源;解析不到有效房间返回 false。 */
+    private boolean getRoomDetailByBetard(MovieDetail detail, String id) {
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set(HttpHeaders.USER_AGENT, Constants.USER_AGENT);
+            headers.set(HttpHeaders.REFERER, "https://www.douyu.com/" + id);
+            String body = restTemplate.exchange("https://www.douyu.com/betard/" + id, HttpMethod.GET,
+                    new HttpEntity<>(headers), String.class).getBody();
+            JsonNode room = objectMapper.readTree(body).path("room");
+            if (!room.isObject() || room.path("room_id").asLong(0) == 0) {
+                return false;
+            }
+            detail.setVod_name(room.path("room_name").asText());
+            detail.setVod_pic(room.path("room_pic").asText(room.path("room_src").asText()));
+            detail.setVod_actor(room.path("nickname").asText());
+            detail.setType_name(room.path("second_lvl_name").asText());
+            boolean replay = room.path("videoLoop").asInt(0) == 1;
+            detail.setVod_remarks(replay ? "录播中" : "直播中");
+            return true;
+        } catch (Exception e) {
+            log.warn("斗鱼betard获取失败,回退开放接口: {}", id, e);
+            return false;
+        }
+    }
+
     private void parseUrl(MovieDetail movieDetail, String id) throws IOException {
         HttpHeaders headers = new HttpHeaders();
         headers.set(HttpHeaders.REFERER, "https://www.douyu.com/" + id);
+        headers.set(HttpHeaders.USER_AGENT, Constants.USER_AGENT);
         String url = "https://www.douyu.com/swf_api/homeH5Enc?rids=" + id;
         String html = restTemplate.getForObject(url, String.class);
-        ObjectNode node = objectMapper.readValue(html, ObjectNode.class);
-        node = (ObjectNode) node.get("data");
-        String crptext = node.get("room" + id).asText();
-        String data = getPlayArgs(crptext, id);
+        String data = getPlayArgs(html);
         String dataUse = data + "&cdn=&rate=-1&ver=Douyu_223061205&iar=1&ive=1&hevc=0&fa=0";
+        log.debug("dataUse: {}", dataUse);
         url = "https://www.douyu.com/lapi/live/getH5Play/" + id;
 
         headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
         HttpEntity<String> request = new HttpEntity<>(dataUse, headers);
-        ResponseEntity<DouyuStreamResponse> response = restTemplate.exchange(
+        ResponseEntity<String> response = restTemplate.exchange(
                 url,
                 HttpMethod.POST,
                 request,
-                DouyuStreamResponse.class
+                String.class
         );
         log.debug("{}", response.getBody());
 
         List<String> playFrom = new ArrayList<>();
         List<String> playUrl = new ArrayList<>();
 
-        var stream = response.getBody().getData();
+        DouyuStreamResponse douyuStreamResponse = objectMapper.readValue(response.getBody(), DouyuStreamResponse.class);
+        var stream = douyuStreamResponse.getData();
         for (var cdn : stream.getCdnsWithName()) {
             playFrom.add(cdn.getName());
             List<String> urls = new ArrayList<>();
@@ -258,26 +292,10 @@ public class DouyuService implements LivePlatform {
         return rtmpUrl + "/" + rtmpLive;
     }
 
-    private final Pattern pattern = Pattern.compile("(vdwdae325w_64we[\\s\\S]*?function ub98484234[\\s\\S]*?)function");
-
-    private String getPlayArgs(String crptext, String realRoomId) {
+    private String getPlayArgs(String json) {
         try {
-            Matcher matcher = pattern.matcher(crptext);
-            if (matcher.find()) {
-                crptext = matcher.group(1);
-            } else {
-                return "";
-            }
-
-            String regex1 = "eval.*?;}";
-            String replacement = "strc;}";
-            crptext = crptext.replaceAll(regex1, replacement);
-            crptext = crptext.replaceAll("\"", "\\\"");
-            Map<String, String> requestBody = new HashMap<>();
-            requestBody.put("html", crptext);
-            requestBody.put("rid", realRoomId);
-            ObjectNode result = restTemplate.postForObject("http://alive.nsapps.cn/api/AllLive/DouyuSign", requestBody, ObjectNode.class);
-            return result.get("data").asText();
+            ObjectNode response = restTemplate.postForObject("http://dy.har01d.cn/sign", objectMapper.readTree(json), ObjectNode.class);
+            return response.get("result").asText();
         } catch (Exception e) {
             log.error("斗鱼---getPlayArgs异常", e);
         }

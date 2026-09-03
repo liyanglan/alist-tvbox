@@ -1,13 +1,22 @@
 <template>
-  <div class="list">
-    <h1>网盘账号列表</h1>
-    <el-row justify="end">
+  <div :class="embedded ? '' : 'page-container'">
+    <div class="page-header" v-if="!embedded">
+      <h1 class="page-title">网盘账号列表</h1>
+      <div class="page-actions">
+        <el-button @click="load">刷新</el-button>
+        <el-button v-if="store.admin" @click="openConfig">配置</el-button>
+        <el-button type="primary" @click="handleAdd">添加</el-button>
+      </div>
+    </div>
+    <div v-else class="page-actions" style="margin-bottom: 16px; display: flex; justify-content: flex-end; gap: 12px;">
       <el-button @click="load">刷新</el-button>
+      <el-button v-if="store.admin" type="primary" @click="openConfig">配置</el-button>
       <el-button type="primary" @click="handleAdd">添加</el-button>
-    </el-row>
-    <div class="space"></div>
+    </div>
 
-    <el-table :data="accounts" border style="width: 100%">
+    <div class="page-card">
+    <div class="table-scroll-wrapper">
+    <el-table :data="accounts" border style="width: 100%; min-width: 1200px">
       <el-table-column prop="id" label="ID" sortable width="70">
         <template #default="scope">
           {{ scope.row.id + 4000 }}
@@ -25,10 +34,19 @@
           <span v-else-if="scope.row.type=='CLOUD189'">天翼云盘</span>
           <span v-else-if="scope.row.type=='PAN139'">移动云盘</span>
           <span v-else-if="scope.row.type=='PAN123'">123网盘</span>
+          <span v-else-if="scope.row.type=='OPEN123'">123 Open</span>
           <span v-else-if="scope.row.type=='BAIDU'">百度网盘</span>
+          <span v-else-if="scope.row.type=='GUANGYA'">光鸭云盘</span>
         </template>
       </el-table-column>
       <el-table-column prop="name" label="名称" sortable width="200"/>
+      <el-table-column label="归属" width="90">
+        <template #default="scope">
+          <el-tag :type="scope.row.ownerUid === 0 ? 'info' : 'success'" size="small">
+            {{ scope.row.ownerUid === 0 ? (store.admin ? '全局' : '共享') : '我的' }}
+          </el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="路径">
         <template #default="scope">
           <router-link :to="'/vod' + fullPath(scope.row)">
@@ -56,24 +74,17 @@
           </el-icon>
         </template>
       </el-table-column>
-      <el-table-column prop="master" label="开启代理？" width="120">
+      <el-table-column fixed="right" label="操作" width="270">
         <template #default="scope">
-          <el-icon v-if="scope.row.useProxy">
-            <Check/>
-          </el-icon>
-          <el-icon v-else>
-            <Close/>
-          </el-icon>
-        </template>
-      </el-table-column>
-      <el-table-column prop="concurrency" label="线程数" width="110"/>
-      <el-table-column fixed="right" label="操作" width="200">
-        <template #default="scope">
-          <el-button link type="primary" size="small" @click="handleEdit(scope.row)">编辑</el-button>
-          <el-button link type="danger" size="small" @click="handleDelete(scope.row)">删除</el-button>
+          <el-button link type="primary" size="small" @click="showAccountInfo(scope.row)">账号信息</el-button>
+          <el-button v-if="canManage(scope.row)" link type="primary" size="small" @click="handleEdit(scope.row)">编辑</el-button>
+          <el-button v-if="canManage(scope.row)" link type="danger" size="small" @click="handleDelete(scope.row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
+    </div>
+    </div>
+  </div>
 
     <el-dialog v-model="formVisible" :title="dialogTitle" width="60%">
       <el-form :model="form" label-width="120">
@@ -91,21 +102,23 @@
             <el-radio label="CLOUD189" size="large">天翼云盘</el-radio>
             <el-radio label="PAN139" size="large">移动云盘</el-radio>
             <el-radio label="PAN123" size="large">123网盘</el-radio>
+            <el-radio label="OPEN123" size="large">123 Open</el-radio>
             <el-radio label="BAIDU" size="large">百度网盘</el-radio>
+            <el-radio label="GUANGYA" size="large">光鸭云盘</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="Cookie" required v-if="supportCookie(form.type)">
           <el-input v-model="form.cookie" @change="getInfo" type="textarea" :rows="5"/>
-          <span v-if="form.type=='QUARK'">
+          <span v-if="form.type=='QUARK'||form.type=='QUARK_TV'">
             <a href="https://pan.quark.cn/" target="_blank">夸克网盘</a>
             <span class="hint"></span>
-            <el-button type="primary" @click="showQrCode">扫码获取</el-button>
+            <el-button type="primary" @click="showQrCodeForCookie">扫码获取</el-button>
           </span>
 
-          <span v-if="form.type=='UC'">
+          <span v-if="form.type=='UC'||form.type=='UC_TV'">
             <a href="https://drive.uc.cn/" target="_blank">UC网盘</a>
             <span class="hint"></span>
-            <el-button type="primary" @click="showQrCode">扫码获取</el-button>
+            <el-button type="primary" @click="showQrCodeForCookie">扫码获取</el-button>
           </span>
 
           <span v-if="form.type=='PAN115'">
@@ -116,7 +129,7 @@
 
           <span v-if="form.type=='BAIDU'">
             <a href="https://pan.baidu.com/disk/main" target="_blank">百度网盘</a>
-            <span class="hint">只需要BDUSS</span>
+            <span class="hint">需要完整Cookie</span>
           </span>
 
           <span v-if="form.type=='CLOUD189'">
@@ -142,10 +155,25 @@
           <el-input v-model="form.token" type="textarea" :rows="3"/>
           <el-button type="primary" @click="showQrCode">扫码获取</el-button>
         </el-form-item>
-        <el-form-item label="认证令牌" v-if="form.type=='BAIDU'" required>
+        <el-form-item label="Token" v-if="form.type=='GUANGYA'" required>
+          <el-input v-model="form.token" type="textarea" :rows="3"/>
+          <a href="https://www.guangyapan.com/" target="_blank">光鸭云盘</a>
+          <el-button type="primary" @click="showQrCode">扫码获取</el-button>
+          <el-button class="hint" type="primary" @click="getTokenInfo" v-if="form.token">校验Token</el-button>
+        </el-form-item>
+        <el-form-item label="Token" v-if="form.type=='OPEN123'" required>
+          <el-input v-model="form.token" type="textarea" :rows="3"/>
+          <el-button type="primary" @click="showQrCode">授权获取</el-button>
+          <span class="hint">123 开放平台授权(无需 client_id),点击后在新标签页登录授权,再点「我已授权」自动填入</span>
+        </el-form-item>
+        <el-form-item label="Refresh Token" v-if="form.type=='OPEN123'">
+          <el-input v-model="form.addition.refresh_token" type="textarea" :rows="2"/>
+          <span class="hint">授权后自动填入;用于自动刷新,留空则 Access Token 过期需手动更新</span>
+        </el-form-item>
+        <el-form-item label="认证令牌" v-if="form.type=='BAIDU'">
           <el-input v-model="form.addition.access_token" @change="fixBaiduToken"/>
-          <el-button type="primary" @click="copyLink">获取认证令牌</el-button>
-          <div class="hint">通过认证后复制浏览器链接填入</div>
+<!--          <el-button type="primary" @click="copyLink">获取认证令牌</el-button>-->
+          <div class="hint">不再使用，需要清空</div>
         </el-form-item>
         <el-form-item label="用户名" v-if="form.type=='THUNDER'||form.type=='CLOUD189'||form.type=='PAN123'" required>
           <el-input v-model="form.username" :placeholder="form.type=='THUNDER'?'+86 12345678900':''"/>
@@ -194,21 +222,6 @@
         <el-form-item v-if="form.type=='PAN115'" label="请求限速">
           <el-input-number :min="1" :max="4" v-model="form.addition.limit_rate"/>
         </el-form-item>
-        <el-form-item v-if="supportProxy(form.type)" label="加速代理">
-          <el-switch
-            v-model="form.useProxy"
-            inline-prompt
-            active-text="开启"
-            inactive-text="关闭"
-          />
-          <span class="hint">服务端多线程加速，网页播放强制开启</span>
-        </el-form-item>
-        <el-form-item v-if="supportProxy(form.type)" label="代理线程数">
-          <el-input-number :min="1" :max="64" v-model="form.concurrency"/>
-        </el-form-item>
-        <el-form-item v-if="supportProxy(form.type)" label="分片大小">
-          <el-input-number :min="64" :max="4096" v-model="form.addition.chunk_size"/>
-        </el-form-item>
         <el-form-item label="主账号" v-if="!driverRoundRobin&&form.type!='OPEN115'&&form.type!='QUARK_TV'&&form.type!='UC_TV'">
           <el-switch
             v-model="form.master"
@@ -218,7 +231,7 @@
           />
           <span class="hint">主账号用来观看分享</span>
         </el-form-item>
-        <el-form-item label="自动签到" v-if="form.type=='CLOUD189'">
+        <el-form-item label="自动签到" v-if="form.type=='CLOUD189'||form.type=='BAIDU'">
           <el-switch
             v-model="form.addition.auto_checkin"
             inline-prompt
@@ -234,12 +247,185 @@
             inactive-text="否"
           />
         </el-form-item>
+        <el-form-item label="共享给普通用户" v-if="store.admin && !form.ownerUid">
+          <el-switch
+            v-model="form.shared"
+            inline-prompt
+            active-text="开启"
+            inactive-text="关闭"
+          />
+          <span class="hint">允许普通用户经服务端代理使用该账号,凭证不会下发给普通用户</span>
+        </el-form-item>
         <span style="margin-left: 72px" v-if="form.name">完整路径： {{ fullPath(form) }}</span>
       </el-form>
       <template #footer>
       <span class="dialog-footer">
         <el-button @click="handleCancel">取消</el-button>
         <el-button type="primary" @click="handleConfirm">{{ updateAction ? '更新' : '添加' }}</el-button>
+      </span>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="configVisible" title="网盘账号配置" width="60%">
+      <el-tabs>
+        <el-tab-pane label="代理配置">
+      <div class="proxy-config-grid">
+        <div class="proxy-config-row proxy-config-head">
+          <span>类型</span>
+          <span>启用</span>
+          <span>并发数</span>
+          <span>分片大小(KB)</span>
+        </div>
+        <div class="proxy-config-row" v-for="item in driveTypes" :key="item.key">
+          <span>{{ item.label }}</span>
+          <el-switch
+            v-model="localProxyConfig[item.key].enabled"
+            inline-prompt
+            active-text="开启"
+            inactive-text="关闭"
+          />
+          <el-input-number
+            v-model="localProxyConfig[item.key].concurrency"
+            :min="1"
+            :max="64"
+          />
+          <el-input-number
+            v-model="localProxyConfig[item.key].chunk_size"
+            :min="256"
+            :step="256"
+          />
+        </div>
+      </div>
+      <div class="config-actions">
+        <el-button
+          type="primary"
+          :loading="savingLocalProxyConfig"
+          @click="saveLocalProxyConfig"
+        >
+          保存代理配置
+        </el-button>
+      </div>
+        </el-tab-pane>
+        <el-tab-pane label="免转存直链">
+      <el-form label-width="170">
+        <el-form-item label="开启百度分享免转存">
+          <el-switch v-model="baiduShareDirect" inline-prompt active-text="开启" inactive-text="关闭" @change="updateBaiduShareDirect"/>
+          <span class="hint">DLNA 签名直链为主、失败回退转存;关闭则纯转存(默认关)</span>
+        </el-form-item>
+        <el-form-item label="开启夸克分享免转存">
+          <el-switch v-model="quarkShareDirect" inline-prompt active-text="开启" inactive-text="关闭" @change="updateQuarkShareDirect"/>
+          <span class="hint">分享直链兜底;关闭则仅转存/多账号取链(默认开)</span>
+        </el-form-item>
+        <el-form-item label="开启UC分享免转存">
+          <el-switch v-model="ucShareDirect" inline-prompt active-text="开启" inactive-text="关闭" @change="updateUcShareDirect"/>
+          <span class="hint">分享直链兜底;关闭则仅转存/多账号取链(默认开)</span>
+        </el-form-item>
+      </el-form>
+        </el-tab-pane>
+        <el-tab-pane label="跨网盘秒传">
+      <el-form label-width="170">
+        <el-form-item label="开启阿里秒传115">
+          <el-switch v-model="aliTo115" inline-prompt active-text="开启" inactive-text="关闭" @change="updateAliTo115"/>
+          <span class="hint">按 MD5 秒传到 115,失败回退阿里直链</span>
+        </el-form-item>
+        <el-form-item label="开启阿里秒传123">
+          <el-switch v-model="aliTo123" inline-prompt active-text="开启" inactive-text="关闭" @change="updateAliTo123"/>
+          <span class="hint">帐号页面添加 123 Open 网盘;按 MD5 秒传,失败回退阿里直链</span>
+        </el-form-item>
+        <el-form-item label="开启115秒传123">
+          <el-switch v-model="pan115To123" inline-prompt active-text="开启" inactive-text="关闭" @change="updatePan115To123"/>
+          <span class="hint">帐号页面添加 123 Open 网盘;按 SHA1 秒传,失败回退 115 直链</span>
+        </el-form-item>
+        <el-form-item label="开启光鸭秒传123">
+          <el-switch v-model="guangyaTo123" inline-prompt active-text="开启" inactive-text="关闭" @change="updateGuangyaTo123"/>
+          <span class="hint">帐号页面添加 123 Open 网盘;按 MD5 秒传,失败回退光鸭直链</span>
+        </el-form-item>
+        <el-form-item label="开启夸克秒传123">
+          <el-switch v-model="quarkTo123" inline-prompt active-text="开启" inactive-text="关闭" @change="updateQuarkTo123"/>
+          <span class="hint">帐号页面添加 123 Open 网盘;按 MD5 秒传,失败回退夸克直链</span>
+        </el-form-item>
+        <el-form-item label="开启UC秒传123">
+          <el-switch v-model="ucTo123" inline-prompt active-text="开启" inactive-text="关闭" @change="updateUcTo123"/>
+          <span class="hint">帐号页面添加 123 Open 网盘;按 MD5 秒传,失败回退 UC 直链</span>
+        </el-form-item>
+      </el-form>
+        </el-tab-pane>
+        <el-tab-pane label="转存策略">
+      <el-form label-width="170">
+        <el-form-item label="网盘帐号负载均衡">
+          <el-switch v-model="driverRoundRobin" inline-prompt active-text="开启" inactive-text="关闭" @change="updateDriverRoundRobin"/>
+          <span class="hint">多账号轮询分摊请求</span>
+        </el-form-item>
+        <el-form-item label="夸克UC分享使用TV帐号">
+          <el-switch v-model="ussQuarkTv" inline-prompt active-text="开启" inactive-text="关闭" @change="updateUssQuarkTv"/>
+          <span class="hint">TV 帐号优先取链</span>
+        </el-form-item>
+        <el-form-item label="夸父逐日">
+          <el-switch v-model="quarkMultiAccountProxy" inline-prompt active-text="开启" inactive-text="关闭" @change="updateQuarkMultiAccountProxy"/>
+          <span class="hint">夸克/UC 分享多账号并行下载</span>
+        </el-form-item>
+        <el-form-item label="网盘文件删除延时">
+          <el-input-number v-model="deleteDelayTime" min="0"></el-input-number>
+          &nbsp;&nbsp;秒
+          <span class="hint">0表示不删除</span>
+          <el-button type="primary" @click="updateDeleteDelayTime">更新</el-button>
+        </el-form-item>
+        <el-form-item label="临时分享过期时间">
+          <el-input-number v-model="tempShareExpiration" min="1"></el-input-number>
+          &nbsp;&nbsp;小时
+          <el-button type="primary" @click="updateTempShareExpiration">更新</el-button>
+        </el-form-item>
+      </el-form>
+        </el-tab-pane>
+        <el-tab-pane label="校验清理">
+      <el-form label-width="170">
+        <el-form-item label="网盘分享延迟校验">
+          <el-switch v-model="aliLazyLoad" inline-prompt active-text="开启" inactive-text="关闭" @change="updateAliLazyLoad"/>
+          <span class="hint">延迟校验分享有效性,重启生效</span>
+        </el-form-item>
+        <el-form-item label="网盘分享校验间隔">
+          <el-input-number v-model="validateSharesInterval" min="1"></el-input-number>
+          &nbsp;&nbsp;小时
+          <el-button type="primary" @click="updateValidateSharesInterval">更新</el-button>
+        </el-form-item>
+        <el-form-item label="自动清理失效资源">
+          <el-switch v-model="cleanInvalidShares" inline-prompt active-text="开启" inactive-text="关闭" @change="updateCleanInvalidShares"/>
+          <span class="hint">定期清理失效分享,重启生效</span>
+        </el-form-item>
+      </el-form>
+        </el-tab-pane>
+        <el-tab-pane label="离线下载">
+          <el-form label-width="140">
+            <el-form-item label="开启离线下载">
+              <el-switch v-model="offlineDownloadConfig.enabled" inline-prompt active-text="开启" inactive-text="关闭"/>
+            </el-form-item>
+            <el-form-item label="网盘类型">
+              <el-select v-model="offlineDownloadConfig.driverType" :disabled="!offlineDownloadConfig.enabled">
+                <el-option label="115云盘" value="PAN115"/>
+                <el-option label="光鸭云盘" value="GUANGYA"/>
+                <el-option label="迅雷云盘" value="THUNDER"/>
+              </el-select>
+            </el-form-item>
+            <el-form-item label="网盘账号">
+              <el-select v-model="offlineDownloadConfig.accountId" clearable :disabled="!offlineDownloadConfig.enabled">
+                <el-option v-for="item in offlineAccounts" :key="item.id" :label="item.name" :value="item.id"/>
+              </el-select>
+            </el-form-item>
+            <el-form-item label="当前挂载目录">
+              <el-input :model-value="offlineMountFolder" readonly/>
+            </el-form-item>
+            <el-form-item v-if="offlineQuotaText" label="配额信息">
+              <span>{{ offlineQuotaText }}</span>
+            </el-form-item>
+          </el-form>
+          <div class="config-actions">
+            <el-button type="primary" :loading="savingOfflineDownloadConfig" @click="saveOfflineDownloadConfig">保存离线下载配置</el-button>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+      <template #footer>
+      <span class="dialog-footer">
+        <el-button @click="configVisible = false">取消</el-button>
       </span>
       </template>
     </el-dialog>
@@ -255,13 +441,32 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="qrModel" title="扫码登陆" width="40%">
-      <img alt="qr" :src="'data:image/jpeg;base64,' + qr.qr_data"/>
+    <el-dialog v-model="accountInfoVisible" title="网盘账号信息" width="500px">
+      <el-descriptions v-if="accountInfo" :column="1" border>
+        <el-descriptions-item label="用户名">{{ accountInfo.name || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="用户 ID">{{ accountInfo.id || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="会员类型">{{ accountInfo.vip || '—' }}</el-descriptions-item>
+        <el-descriptions-item label="会员过期时间">{{ formatExpireAt(accountInfo.expireAt) }}</el-descriptions-item>
+        <el-descriptions-item label="已用容量">{{ formatCapacity(accountInfo.usedCapacity) }}</el-descriptions-item>
+        <el-descriptions-item label="总容量">{{ formatCapacity(accountInfo.totalCapacity) }}</el-descriptions-item>
+        <el-descriptions-item v-for="item in accountInfoAdditionItems" :key="item.label" :label="item.label">
+          {{ item.value }}
+        </el-descriptions-item>
+      </el-descriptions>
+    </el-dialog>
+
+    <el-dialog v-model="qrModel" :title="qr.auth_url ? '浏览器授权' : '扫码登陆'" width="40%">
+      <div v-if="qr.auth_url">
+        <p>已在新标签页打开 123 官方授权页面。若未打开，请点击下面的链接：</p>
+        <p><a :href="qr.auth_url" target="_blank" rel="noopener">打开 123 授权页面</a></p>
+        <p class="hint">在该页面登录并同意授权后，回到这里点「我已授权」。</p>
+      </div>
+      <img v-else alt="qr" :src="'data:image/jpeg;base64,' + qr.qr_data"/>
       <template #footer>
       <span class="dialog-footer">
         <el-button @click="qrModel=false">取消</el-button>
-        <el-button @click="showQrCode">刷新二维码</el-button>
-        <el-button type="primary" @click="getRefreshToken">我已扫码</el-button>
+        <el-button @click="showQrCode">{{ qr.auth_url ? '重新授权' : '刷新二维码' }}</el-button>
+        <el-button type="primary" @click="getRefreshToken">{{ qr.auth_url ? '我已授权' : '我已扫码' }}</el-button>
       </span>
       </template>
     </el-dialog>
@@ -287,30 +492,97 @@
       </span>
       </template>
     </el-dialog>
-
-  </div>
 </template>
 
 <script setup lang="ts">
-import {onMounted, ref} from 'vue'
+import {computed, onMounted, ref, watch} from 'vue'
 import {Check, Close} from '@element-plus/icons-vue'
 import axios from "axios"
 import {ElMessage} from "element-plus";
 import clipBorad from "vue-clipboard3";
+import {store} from '@/services/store'
+
+// 多用户归属:全局账号(ownerUid=0)仅管理员可编辑;普通用户只能管理自己的账号(后端 AccountAccessGuard 兜底)
+const canManage = (row: any) => store.admin || row.ownerUid !== 0
 
 let {toClipboard} = clipBorad();
 
+const props = defineProps<{
+  embedded?: boolean
+}>()
+
+type CloudDriveType = 'ALI' | 'QUARK' | 'UC' | 'PAN115' | 'PAN123' | 'PAN139' | 'BAIDU' | 'GUANGYA'
+
+type LocalProxyItem = {
+  enabled: boolean
+  concurrency: number
+  chunk_size: number
+}
+
+type LocalProxyConfig = Record<CloudDriveType, LocalProxyItem>
+
+type OfflineDownloadConfig = {
+  enabled: boolean
+  driverType: string
+  accountId: number | null
+}
+
+type OfflineDownloadQuota = {
+  supported: boolean
+  surplus: number
+  count: number
+  used: number
+  displayText: string
+} | null
+
+type DriverAccountItem = {
+  id: number
+  type: string
+  name: string
+  folder: string
+}
+
+type AccountInfo = {
+  id?: string
+  name?: string
+  vip?: string
+  usedCapacity?: number
+  totalCapacity?: number
+  expireAt?: number | null
+  addition?: Record<string, string | number | null>
+}
+
+type AccountInfoAdditionItem = {
+  label: string
+  value: string
+}
+
 const updateAction = ref(false)
 const dialogTitle = ref('')
-const accounts = ref([])
+const accounts = ref<DriverAccountItem[]>([])
+const accountInfo = ref<AccountInfo | null>(null)
 const formVisible = ref(false)
 const dialogVisible = ref(false)
+const accountInfoVisible = ref(false)
+const configVisible = ref(false)
 const qrModel = ref(false)
 const qr115Model = ref(false)
 const driverRoundRobin = ref(false)
+const driveTypes: Array<{ key: CloudDriveType; label: string }> = [
+  {key: 'ALI', label: '阿里云盘'},
+  {key: 'QUARK', label: '夸克网盘'},
+  {key: 'UC', label: 'UC网盘'},
+  {key: 'PAN115', label: '115云盘'},
+  {key: 'PAN123', label: '123网盘'},
+  {key: 'PAN139', label: '移动云盘'},
+  {key: 'BAIDU', label: '百度网盘'},
+  {key: 'GUANGYA', label: '光鸭云盘'},
+]
 const form = ref({
   id: 0,
   type: 'QUARK',
+  shared: true,
+  ownerUid: 0,
   name: '',
   cookie: '',
   token: '',
@@ -319,6 +591,8 @@ const form = ref({
     page_size: 1000,
     limit_rate: 2,
     access_token: '',
+    refresh_token: '',
+    device_id: '',
     delete_code: '',
     cloud_id: '',
     link_method: 'download',
@@ -337,6 +611,68 @@ const form = ref({
 const qr = ref({
   qr_data: '',
   query_token: '',
+  auth_url: '',
+})
+const qrType = ref('')
+const defaultLocalProxyConfig = (): LocalProxyConfig => ({
+  ALI: {enabled: true, concurrency: 20, chunk_size: 1024},
+  QUARK: {enabled: true, concurrency: 20, chunk_size: 1024},
+  UC: {enabled: true, concurrency: 10, chunk_size: 256},
+  PAN115: {enabled: true, concurrency: 2, chunk_size: 1024},
+  PAN123: {enabled: true, concurrency: 4, chunk_size: 256},
+  PAN139: {enabled: true, concurrency: 4, chunk_size: 256},
+  BAIDU: {enabled: true, concurrency: 5, chunk_size: 2048},
+  GUANGYA: {enabled: true, concurrency: 10, chunk_size: 256},
+})
+const localProxyConfig = ref<LocalProxyConfig>(defaultLocalProxyConfig())
+const offlineDownloadConfig = ref<OfflineDownloadConfig>({
+  enabled: false,
+  driverType: 'PAN115',
+  accountId: null,
+})
+const offlineDownloadQuota = ref<OfflineDownloadQuota>(null)
+const savingLocalProxyConfig = ref(false)
+const savingOfflineDownloadConfig = ref(false)
+// 网盘账号配置 · 分享免转存直链(默认:百度关,夸克/UC开)
+const baiduShareDirect = ref(false)
+const quarkShareDirect = ref(true)
+const ucShareDirect = ref(true)
+// 网盘账号配置 · 秒传到 123
+const aliTo115 = ref(false)
+const aliTo123 = ref(false)
+const pan115To123 = ref(false)
+const guangyaTo123 = ref(false)
+const quarkTo123 = ref(false)
+const ucTo123 = ref(false)
+// 网盘账号配置 · 账号·转存策略(driverRoundRobin 已在上方声明)
+const ussQuarkTv = ref(false)
+const quarkMultiAccountProxy = ref(false)
+const deleteDelayTime = ref(900)
+const tempShareExpiration = ref(72)
+// 网盘账号配置 · 分享校验·清理
+const aliLazyLoad = ref(true)
+const validateSharesInterval = ref(4)
+const cleanInvalidShares = ref(false)
+const offlineAccounts = computed(() => accounts.value.filter((item) => item.type === offlineDownloadConfig.value.driverType))
+const offlineMountFolder = computed(() => {
+  const account = offlineAccounts.value.find((item) => item.id === offlineDownloadConfig.value.accountId)
+  return account ? fullPath(account) : ''
+})
+const offlineQuotaText = computed(() => {
+  if (!offlineDownloadQuota.value || !offlineDownloadQuota.value.supported) {
+    return ''
+  }
+  if (offlineDownloadQuota.value.displayText) {
+    return offlineDownloadQuota.value.displayText
+  }
+  return `本月配额：剩${offlineDownloadQuota.value.surplus}/总${offlineDownloadQuota.value.count}个`
+})
+
+watch(() => offlineDownloadConfig.value.driverType, () => {
+  const exists = offlineAccounts.value.some((item) => item.id === offlineDownloadConfig.value.accountId)
+  if (!exists) {
+    offlineDownloadConfig.value.accountId = offlineAccounts.value.length > 0 ? offlineAccounts.value[0].id : null
+  }
 })
 
 const app = ref('alipaymini')
@@ -406,19 +742,11 @@ const tvLinkMethod = [
 const supportCookie = (type: string) => {
   return type == 'PAN115'
     || type == 'QUARK'
-    || type == 'UC'
-    || type == 'BAIDU'
-    || type == 'CLOUD189'
-}
-
-const supportProxy = (type: string) => {
-  return type == 'PAN115'
-    || type == 'QUARK'
     || type == 'QUARK_TV'
     || type == 'UC'
     || type == 'UC_TV'
     || type == 'BAIDU'
-    || type == 'PAN139'
+    || type == 'CLOUD189'
 }
 
 const handleAdd = () => {
@@ -427,6 +755,8 @@ const handleAdd = () => {
   form.value = {
     id: 0,
     type: 'QUARK',
+    shared: true,
+    ownerUid: 0,
     name: '',
     cookie: '',
     token: '',
@@ -435,6 +765,8 @@ const handleAdd = () => {
       page_size: 1000,
       limit_rate: 2,
       access_token: '',
+      refresh_token: '',
+      device_id: '',
       delete_code: '',
       cloud_id: '',
       link_method: 'download',
@@ -451,6 +783,213 @@ const handleAdd = () => {
     master: false,
   }
   formVisible.value = true
+}
+
+const normalizeLocalProxyConfig = (value: any): LocalProxyConfig => {
+  const defaults = defaultLocalProxyConfig()
+  for (const item of driveTypes) {
+    const current = value?.[item.key] || {}
+    defaults[item.key] = {
+      enabled: current.enabled ?? defaults[item.key].enabled,
+      concurrency: current.concurrency ?? defaults[item.key].concurrency,
+      chunk_size: current.chunk_size ?? defaults[item.key].chunk_size,
+    }
+  }
+  return defaults
+}
+
+const loadLocalProxyConfig = async () => {
+  const {data} = await axios.get('/api/settings/local_proxy_config')
+  if (!data || !data.value) {
+    localProxyConfig.value = defaultLocalProxyConfig()
+    return
+  }
+
+  try {
+    localProxyConfig.value = normalizeLocalProxyConfig(JSON.parse(data.value))
+  } catch (e) {
+    localProxyConfig.value = defaultLocalProxyConfig()
+  }
+}
+
+const loadOfflineDownloadConfig = async () => {
+  const {data} = await axios.get('/api/offline_download/config')
+  offlineDownloadConfig.value = {
+    enabled: !!data?.enabled,
+    driverType: data?.driverType ?? 'PAN115',
+    accountId: data?.accountId ?? null,
+  }
+}
+
+const loadOfflineDownloadQuota = async () => {
+  offlineDownloadQuota.value = null
+  if (!offlineDownloadConfig.value.enabled || offlineDownloadConfig.value.accountId == null) {
+    return
+  }
+
+  await axios.get('/api/offline_download/quota').then(({data}) => {
+    offlineDownloadQuota.value = {
+      supported: data?.supported ?? true,
+      surplus: data?.surplus ?? 0,
+      count: data?.count ?? 0,
+      used: data?.used ?? 0,
+      displayText: data?.displayText ?? '',
+    }
+  }).catch(() => {
+    offlineDownloadQuota.value = null
+  })
+}
+
+const openConfig = async () => {
+  await loadLocalProxyConfig()
+  await loadOfflineDownloadConfig()
+  await loadOfflineDownloadQuota()
+  await loadDriverPlaySettings()
+  configVisible.value = true
+}
+
+// 加载迁入的网盘相关开关(免转存/秒传123/账号转存策略/分享校验清理)
+const loadDriverPlaySettings = async () => {
+  const {data} = await axios.get('/api/settings')
+  baiduShareDirect.value = data.baidu_share_direct === 'true'
+  quarkShareDirect.value = data.quark_share_direct !== 'false'
+  ucShareDirect.value = data.uc_share_direct !== 'false'
+  aliTo115.value = data.ali_to_115 === 'true'
+  aliTo123.value = data.ali_to_123 === 'true'
+  pan115To123.value = data['115_to_123'] === 'true'
+  guangyaTo123.value = data.guangya_to_123 === 'true'
+  quarkTo123.value = data.quark_to_123 === 'true'
+  ucTo123.value = data.uc_to_123 === 'true'
+  driverRoundRobin.value = data.driver_round_robin === 'true'
+  ussQuarkTv.value = data.use_quark_tv === 'true'
+  quarkMultiAccountProxy.value = data.quark_multi_account_proxy === 'true'
+  deleteDelayTime.value = +data.delete_delay_time || 900
+  tempShareExpiration.value = +data.temp_share_expiration || 72
+  aliLazyLoad.value = data.ali_lazy_load !== 'false'
+  validateSharesInterval.value = +data.validateSharesInterval || 4
+  cleanInvalidShares.value = data.clean_invalid_shares === 'true'
+}
+
+const updateBaiduShareDirect = () => {
+  axios.post('/api/settings', {name: 'baidu_share_direct', value: baiduShareDirect.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateQuarkShareDirect = () => {
+  axios.post('/api/settings', {name: 'quark_share_direct', value: quarkShareDirect.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateUcShareDirect = () => {
+  axios.post('/api/settings', {name: 'uc_share_direct', value: ucShareDirect.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateAliTo115 = () => {
+  axios.post('/api/settings', {name: 'ali_to_115', value: aliTo115.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateAliTo123 = () => {
+  axios.post('/api/settings', {name: 'ali_to_123', value: aliTo123.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updatePan115To123 = () => {
+  axios.post('/api/settings', {name: '115_to_123', value: pan115To123.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateGuangyaTo123 = () => {
+  axios.post('/api/settings', {name: 'guangya_to_123', value: guangyaTo123.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateQuarkTo123 = () => {
+  axios.post('/api/settings', {name: 'quark_to_123', value: quarkTo123.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateUcTo123 = () => {
+  axios.post('/api/settings', {name: 'uc_to_123', value: ucTo123.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateDriverRoundRobin = () => {
+  axios.post('/api/settings', {name: 'driver_round_robin', value: driverRoundRobin.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateUssQuarkTv = () => {
+  axios.post('/api/settings', {name: 'use_quark_tv', value: ussQuarkTv.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateQuarkMultiAccountProxy = () => {
+  axios.post('/api/settings', {name: 'quark_multi_account_proxy', value: quarkMultiAccountProxy.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateDeleteDelayTime = () => {
+  axios.post('/api/settings', {name: 'delete_delay_time', value: deleteDelayTime.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateTempShareExpiration = () => {
+  axios.post('/api/settings', {name: 'temp_share_expiration', value: tempShareExpiration.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateAliLazyLoad = () => {
+  axios.post('/api/settings', {name: 'ali_lazy_load', value: aliLazyLoad.value}).then(() => {
+    ElMessage.success('更新成功，重启生效')
+  })
+}
+const updateValidateSharesInterval = () => {
+  axios.post('/api/settings', {name: 'validateSharesInterval', value: validateSharesInterval.value}).then(() => {
+    ElMessage.success('更新成功')
+  })
+}
+const updateCleanInvalidShares = () => {
+  axios.post('/api/settings', {name: 'clean_invalid_shares', value: cleanInvalidShares.value}).then(() => {
+    ElMessage.success('更新成功，重启生效')
+  })
+}
+
+const updateLocalProxyConfig = () => {
+  return axios.post('/api/settings', {
+    name: 'local_proxy_config',
+    value: JSON.stringify(localProxyConfig.value),
+  })
+}
+
+const updateOfflineDownloadConfig = () => {
+  return axios.post('/api/offline_download/config', offlineDownloadConfig.value)
+}
+
+const saveLocalProxyConfig = async () => {
+  try {
+    savingLocalProxyConfig.value = true
+    await updateLocalProxyConfig()
+    ElMessage.success('代理配置已保存')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '代理配置保存失败')
+  } finally {
+    savingLocalProxyConfig.value = false
+  }
+}
+
+const saveOfflineDownloadConfig = async () => {
+  try {
+    savingOfflineDownloadConfig.value = true
+    await updateOfflineDownloadConfig()
+    await loadOfflineDownloadQuota()
+    ElMessage.success('离线下载配置已保存')
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.message || '离线下载配置保存失败')
+  } finally {
+    savingOfflineDownloadConfig.value = false
+  }
 }
 
 const getTypeName = (type: string) => {
@@ -484,8 +1023,14 @@ const getTypeName = (type: string) => {
   if (type == 'PAN123') {
     return '123网盘'
   }
+  if (type == 'OPEN123') {
+    return '123 Open'
+  }
   if (type == 'BAIDU') {
     return '百度网盘'
+  }
+  if (type == 'GUANGYA') {
+    return '光鸭云盘'
   }
   return '未知'
 }
@@ -515,11 +1060,72 @@ const fullPath = (share: any) => {
     return '/我的移动云盘/' + path
   } else if (share.type == 'PAN123') {
     return '/我的123网盘/' + path
+  } else if (share.type == 'OPEN123') {
+    return '/我的123Open/' + path
   } else if (share.type == 'BAIDU') {
     return '/我的百度网盘/' + path
+  } else if (share.type == 'GUANGYA') {
+    return '/我的光鸭云盘/' + path
   } else {
     return '/网盘/' + path
   }
+}
+
+const formatCapacity = (bytes?: number) => {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) {
+    return '—'
+  }
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex++
+  }
+  return `${value.toFixed(unitIndex === 0 ? 0 : 2)} ${units[unitIndex]}`
+}
+
+const formatExpireAt = (expireAt?: number | null) => {
+  if (!expireAt) {
+    return '—'
+  }
+  const timestamp = expireAt < 100000000000 ? expireAt * 1000 : expireAt
+  const date = new Date(timestamp)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', {hour12: false})
+}
+
+const accountInfoAdditionItems = computed<AccountInfoAdditionItem[]>(() => {
+  const addition = accountInfo.value?.addition
+  if (!addition) {
+    return []
+  }
+  const hasValue = (key: string) => addition[key] != null
+  const capacity = (key: string) => formatCapacity(Number(addition[key]))
+  const traffic = (usedKey: string, totalKey: string) => `${capacity(usedKey)} / ${capacity(totalKey)}`
+  const items: AccountInfoAdditionItem[] = []
+  if (hasValue('permanentCapacity')) items.push({label: '永久容量', value: capacity('permanentCapacity')})
+  if (hasValue('temporaryCapacity')) items.push({label: '临时容量', value: capacity('temporaryCapacity')})
+  if (hasValue('temporaryExpireAt')) items.push({label: '临时容量到期时间', value: formatExpireAt(Number(addition.temporaryExpireAt))})
+  if (hasValue('fileCount')) items.push({label: '文件数量', value: String(addition.fileCount)})
+  if (hasValue('phone')) items.push({label: '绑定手机', value: String(addition.phone)})
+  if (hasValue('highSpeedTrafficTotal')) items.push({label: '高速下载流量（已用/总）', value: traffic('highSpeedTrafficUsed', 'highSpeedTrafficTotal')})
+  if (hasValue('directLinkTrafficTotal')) items.push({label: '直链流量（已用/总）', value: traffic('directLinkTrafficUsed', 'directLinkTrafficTotal')})
+  if (hasValue('shareGuestTrafficTotal')) items.push({label: '免登下载流量（已用/总）', value: traffic('shareGuestTrafficUsed', 'shareGuestTrafficTotal')})
+  return items
+})
+
+const showAccountInfo = (account: DriverAccountItem) => {
+  accountInfo.value = null
+  axios.post('/api/pan/accounts/-/info', account).then(({data}) => {
+    if (!data) {
+      ElMessage.error('未获取到账号信息')
+      return
+    }
+    accountInfo.value = data
+    accountInfoVisible.value = true
+  }).catch((error) => {
+    ElMessage.error(error?.response?.data?.message || '获取账号信息失败')
+  })
 }
 
 const handleEdit = (data: any) => {
@@ -560,7 +1166,27 @@ const handleConfirm = () => {
 }
 
 const showQrCode = () => {
+  qrType.value = form.value.type
   axios.post('/api/pan/accounts/-/qr?type=' + form.value.type).then(({data}) => {
+    qr.value = data
+    qrModel.value = true
+    // 123 Open 走浏览器授权(litepan 代理内置 client_id),不是扫码:直接开新标签页。
+    if (data.auth_url) {
+      window.open(data.auth_url, '_blank', 'noopener')
+    }
+  })
+}
+
+const showQrCodeForCookie = () => {
+  // For QUARK_TV and UC_TV, use QUARK and UC type to get cookie
+  let type = form.value.type
+  if (type === 'QUARK_TV') {
+    type = 'QUARK'
+  } else if (type === 'UC_TV') {
+    type = 'UC'
+  }
+  qrType.value = type
+  axios.post('/api/pan/accounts/-/qr?type=' + type).then(({data}) => {
     qr.value = data
     qrModel.value = true
   })
@@ -579,6 +1205,23 @@ const getInfo = () => {
       }
     } else {
       ElMessage.error('Cookie无效')
+    }
+  })
+}
+
+const getTokenInfo = () => {
+  if (!form.value.token) {
+    return
+  }
+  const data = Object.assign({}, form.value, {addition: JSON.stringify(form.value.addition)})
+  axios.post('/api/pan/accounts/-/info', data).then(({data}) => {
+    if (data && data.name) {
+      ElMessage.success('Token有效：' + data.name)
+      if (!form.value.name) {
+        form.value.name = data.name
+      }
+    } else {
+      ElMessage.error('Token无效')
     }
   })
 }
@@ -606,11 +1249,19 @@ const fixBaiduToken = () => {
 }
 
 const getRefreshToken = () => {
-  axios.post('/api/pan/accounts/-/token?type=' + form.value.type + '&queryToken=' + qr.value.query_token).then(({data}) => {
-    if (form.value.type == 'QUARK' || form.value.type == 'UC') {
+  axios.post('/api/pan/accounts/-/token?type=' + qrType.value + '&queryToken=' + qr.value.query_token).then(({data}) => {
+    if (qrType.value == 'QUARK' || qrType.value == 'UC') {
       form.value.cookie = data.cookie
     } else {
       form.value.token = data.token
+    }
+    if (qrType.value == 'GUANGYA' && data.addition) {
+      form.value.addition.access_token = data.addition.access_token || data.token || ''
+      form.value.addition.refresh_token = data.addition.refresh_token || ''
+      form.value.addition.device_id = data.addition.device_id || ''
+    }
+    if (qrType.value == 'OPEN123' && data.addition) {
+      form.value.addition.refresh_token = data.addition.refresh_token || ''
     }
     if (!form.value.name) {
       form.value.name = data.name
@@ -669,5 +1320,27 @@ onMounted(() => {
 .json pre {
   height: 600px;
   overflow: scroll;
+}
+
+.proxy-config-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.proxy-config-row {
+  display: grid;
+  grid-template-columns: 120px 120px 160px 180px;
+  align-items: center;
+  gap: 12px;
+}
+
+.proxy-config-head {
+  font-weight: 600;
+}
+
+.config-actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
 }
 </style>

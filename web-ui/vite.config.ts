@@ -30,6 +30,8 @@ export default defineConfig({
       "/live": API,
       "/images": API,
       "/history": API,
+      "/tg-db": API,
+      "/tgsc": API,
     }
   }
 })

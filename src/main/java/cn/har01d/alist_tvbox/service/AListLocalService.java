@@ -1,7 +1,35 @@
 package cn.har01d.alist_tvbox.service;
 
-import static cn.har01d.alist_tvbox.util.Constants.ALIST_RESTART_REQUIRED;
-import static cn.har01d.alist_tvbox.util.Constants.ALIST_START_TIME;
+import cn.har01d.alist_tvbox.config.AppProperties;
+import cn.har01d.alist_tvbox.entity.Setting;
+import cn.har01d.alist_tvbox.entity.SettingRepository;
+import cn.har01d.alist_tvbox.entity.Site;
+import cn.har01d.alist_tvbox.entity.SiteRepository;
+import cn.har01d.alist_tvbox.exception.BadRequestException;
+import cn.har01d.alist_tvbox.model.AliTokensResponse;
+import cn.har01d.alist_tvbox.model.Response;
+import cn.har01d.alist_tvbox.model.SettingResponse;
+import cn.har01d.alist_tvbox.storage.Storage;
+import cn.har01d.alist_tvbox.util.Constants;
+import cn.har01d.alist_tvbox.util.Utils;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.restclient.RestTemplateBuilder;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.core.env.Environment;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
 import java.io.File;
 import java.io.IOException;
@@ -15,40 +43,28 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.commons.lang3.StringUtils;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.web.client.RestTemplateBuilder;
-import org.springframework.core.env.Environment;
-import org.springframework.dao.EmptyResultDataAccessException;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.ResponseEntity;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-
-import cn.har01d.alist_tvbox.config.AppProperties;
-import cn.har01d.alist_tvbox.entity.Setting;
-import cn.har01d.alist_tvbox.entity.SettingRepository;
-import cn.har01d.alist_tvbox.entity.Site;
-import cn.har01d.alist_tvbox.entity.SiteRepository;
-import cn.har01d.alist_tvbox.exception.BadRequestException;
-import cn.har01d.alist_tvbox.model.AliTokensResponse;
-import cn.har01d.alist_tvbox.model.SettingResponse;
-import cn.har01d.alist_tvbox.storage.Storage;
-import cn.har01d.alist_tvbox.util.Constants;
-import cn.har01d.alist_tvbox.util.Utils;
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
-import lombok.extern.slf4j.Slf4j;
+import static cn.har01d.alist_tvbox.util.Constants.ALIST_RESTART_REQUIRED;
+import static cn.har01d.alist_tvbox.util.Constants.ALIST_START_TIME;
 
 @Slf4j
 @Service
 
 public class AListLocalService {
+    private static final String TYPE_STRING = "string";
+    private static final int OFFLINE_DOWNLOAD_GROUP = 6;
+    private static final int PRIVATE_FLAG = 2;
+    private static final String PROXY_CONFIG_KEY = "proxy_config";
+    // alist-tvbox 网盘类型 -> PowerList 驱动名(storage.driver)，用于把 local_proxy_config 转成 PowerList 全局 proxy_config
+    private static final Map<String, String> PROXY_DRIVER_NAMES = Map.of(
+            "ALI", "AliyundriveOpen",
+            "QUARK", "Quark",
+            "UC", "UC",
+            "PAN115", "115 Cloud",
+            "PAN123", "123Pan",
+            "PAN139", "139Yun",
+            "BAIDU", "BaiduNetdisk",
+            "GUANGYA", "GuangYaPan"
+    );
 
     private final SettingRepository settingRepository;
     private final SiteRepository siteRepository;
@@ -83,6 +99,7 @@ public class AListLocalService {
 
     @PostConstruct
     public void setup() {
+        addColumnIfMissing("ALTER TABLE x_storages ADD COLUMN custom_cache_policies text DEFAULT ''");
         log.info("AList internal port: {}", internalPort);
         log.info("AList external port: {}", externalPort);
         setSetting("external_port", String.valueOf(externalPort), "number");
@@ -106,10 +123,32 @@ public class AListLocalService {
         setSetting("delete_delay_time", time, "number");
         String aliTo115 = settingRepository.findById("ali_to_115").map(Setting::getValue).orElse("false");
         setSetting("ali_to_115", aliTo115, "bool");
+        String aliTo123 = settingRepository.findById("ali_to_123").map(Setting::getValue).orElse("false");
+        setSetting("ali_to_123", aliTo123, "bool");
+        String pan115To123 = settingRepository.findById("115_to_123").map(Setting::getValue).orElse("false");
+        setSetting("115_to_123", pan115To123, "bool");
+        String quarkTo123 = settingRepository.findById("quark_to_123").map(Setting::getValue).orElse("false");
+        setSetting("quark_to_123", quarkTo123, "bool");
+        String ucTo123 = settingRepository.findById("uc_to_123").map(Setting::getValue).orElse("false");
+        setSetting("uc_to_123", ucTo123, "bool");
+        String guangyaTo123 = settingRepository.findById("guangya_to_123").map(Setting::getValue).orElse("false");
+        setSetting("guangya_to_123", guangyaTo123, "bool");
+        String baiduShareDirect = settingRepository.findById("baidu_share_direct").map(Setting::getValue).orElse("false");
+        setSetting("baidu_share_direct", baiduShareDirect, "bool");
+        String quarkShareDirect = settingRepository.findById("quark_share_direct").map(Setting::getValue).orElse("true");
+        setSetting("quark_share_direct", quarkShareDirect, "bool");
+        String ucShareDirect = settingRepository.findById("uc_share_direct").map(Setting::getValue).orElse("true");
+        setSetting("uc_share_direct", ucShareDirect, "bool");
         String roundRobin = settingRepository.findById("driver_round_robin").map(Setting::getValue).orElse("false");
         setSetting("driver_round_robin", roundRobin, "bool");
+        String ussQuarkTv = settingRepository.findById("use_quark_tv").map(Setting::getValue).orElse("false");
+        setSetting("use_quark_tv", ussQuarkTv, "bool");
+        String quarkMultiAccountProxy = settingRepository.findById("quark_multi_account_proxy").map(Setting::getValue).orElse("false");
+        setSetting("quark_multi_account_proxy", quarkMultiAccountProxy, "bool");
         String lazy = settingRepository.findById("ali_lazy_load").map(Setting::getValue).orElse("true");
         setSetting("ali_lazy_load", lazy, "bool");
+        String localProxyConfig = settingRepository.findById("local_proxy_config").map(Setting::getValue).orElse("");
+        updateProxyConfig(localProxyConfig);
     }
 
     public int getInternalPort() {
@@ -155,9 +194,14 @@ public class AListLocalService {
 
     public void setSetting(String key, String value, String type) {
         log.debug("set setting {}={}", key, value);
-        executeUpdate(String.format("DELETE FROM x_setting_items WHERE `key` = '%s'", key));
-        executeUpdate(String.format("INSERT INTO x_setting_items (`key`,value,type,flag,`group`) VALUES('%s','%s','%s',1,0)", key, value, type));
-        log.info("update setting by SQL: {}", key);
+        // Use parameterized queries to prevent SQL injection
+        try {
+            executeUpdate("DELETE FROM x_setting_items WHERE `key` = ?", key);
+            executeUpdate("INSERT INTO x_setting_items (`key`,value,type,flag,`group`) VALUES(?,?,?,1,0)", key, value, type);
+            log.info("update setting by SQL: {}", key);
+        } catch (Exception e) {
+            log.warn("Failed to update setting: {}", key, e);
+        }
     }
 
     public void updateSetting(String key, String value, String type) {
@@ -182,6 +226,32 @@ public class AListLocalService {
         }
     }
 
+    public void updateProxyConfig(String localProxyConfigJson) {
+        String json = buildProxyConfigJson(localProxyConfigJson);
+        log.debug("sync proxy_config to AList: {}", json);
+        updateSetting(PROXY_CONFIG_KEY, json, TYPE_STRING);
+    }
+
+    private String buildProxyConfigJson(String localProxyConfigJson) {
+        Map<String, Object> result = new HashMap<>();
+        if (StringUtils.isNotBlank(localProxyConfigJson)) {
+            Map<String, Object> config = Utils.readJson(localProxyConfigJson);
+            if (config != null) {
+                for (Map.Entry<String, Object> entry : config.entrySet()) {
+                    String driver = PROXY_DRIVER_NAMES.get(entry.getKey());
+                    if (driver == null || !(entry.getValue() instanceof Map<?, ?> item)) {
+                        continue;
+                    }
+                    Map<String, Object> out = new HashMap<>();
+                    out.put("concurrency", item.get("concurrency"));
+                    out.put("chunk_size", item.get("chunk_size"));
+                    result.put(driver, out);
+                }
+            }
+        }
+        return Utils.toJsonString(result);
+    }
+
     public SettingResponse getSetting(String key) {
         HttpHeaders headers = new HttpHeaders();
         Site site = siteRepository.findById(1).orElseThrow();
@@ -192,14 +262,76 @@ public class AListLocalService {
         return response.getBody();
     }
 
+    public Response<String> set115TempDir(String tempDir) {
+        setOfflineDownloadTempDir("115_temp_dir", tempDir);
+        if (checkStatus() < 2) {
+            return successResponse();
+        }
+        HttpHeaders headers = new HttpHeaders();
+        Site site = siteRepository.findById(1).orElseThrow();
+        headers.set(HttpHeaders.AUTHORIZATION, site.getToken());
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        Map<String, Object> body = new HashMap<>();
+        body.put("temp_dir", tempDir);
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
+        ResponseEntity<Response<String>> response = restTemplate.exchange("/api/admin/setting/set_115", HttpMethod.POST, entity, new ParameterizedTypeReference<Response<String>>() {
+        });
+        return response.getBody();
+    }
+
+    public Response<String> setThunderBrowserTempDir(String tempDir) {
+        setOfflineDownloadTempDir("thunder_browser_temp_dir", tempDir);
+        if (checkStatus() < 2) {
+            return successResponse();
+        }
+        HttpHeaders headers = new HttpHeaders();
+        Site site = siteRepository.findById(1).orElseThrow();
+        headers.set(HttpHeaders.AUTHORIZATION, site.getToken());
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        Map<String, Object> body = new HashMap<>();
+        body.put("temp_dir", tempDir);
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
+        ResponseEntity<Response<String>> response = restTemplate.exchange("/api/admin/setting/set_thunder_browser", HttpMethod.POST, entity, new ParameterizedTypeReference<Response<String>>() {
+        });
+        return response.getBody();
+    }
+
+    public void setOfflineDownloadTempDir(String key, String tempDir) {
+        log.debug("set offline download temp dir {}={}", key, tempDir);
+        executeUpdate(String.format("DELETE FROM x_setting_items WHERE `key` = '%s'", key));
+        executeUpdate(String.format(
+                "INSERT INTO x_setting_items (`key`,value,type,flag,`group`) VALUES('%s','%s','%s',%d,%d)",
+                key, tempDir, TYPE_STRING, PRIVATE_FLAG, OFFLINE_DOWNLOAD_GROUP
+        ));
+    }
+
+    private Response<String> successResponse() {
+        Response<String> response = new Response<>();
+        response.setCode(200);
+        response.setMessage("success");
+        response.setData("ok");
+        return response;
+    }
+
+    private void addColumnIfMissing(String sql) {
+        try {
+            executeUpdate(sql);
+        } catch (Exception e) {
+            if (!e.getMessage().contains("duplicate column name")) {
+                throw e;
+            }
+        }
+    }
+
     public void saveStorage(Storage storage) {
-        executeUpdate("DELETE FROM x_storages WHERE id = " + storage.getId());
+        executeUpdate("DELETE FROM x_storages WHERE id = ?", storage.getId());
         String time = storage.getTime().truncatedTo(ChronoUnit.SECONDS).atZone(ZoneId.systemDefault()).toLocalDateTime().toString();
         String sql = "INSERT INTO x_storages " +
-                "(id,mount_path,`order`,driver,cache_expiration,status,addition,modified,disabled,order_by,order_direction,extract_folder,web_proxy,webdav_policy) " +
-                "VALUES (%d,'%s',0,'%s',%d,'work','%s','%s',%d,'name','asc','front',%d,'%s');";
-        executeUpdate(String.format(sql, storage.getId(), storage.getPath(), storage.getDriver(),
-                storage.getCacheExpiration(), storage.getAddition(), time, storage.isDisabled() ? 1 : 0, storage.isWebProxy() ? 1 : 0, storage.getWebdavPolicy()));
+                "(id,mount_path,`order`,driver,cache_expiration,custom_cache_policies,status,addition,modified,disabled,order_by,order_direction,extract_folder,web_proxy,webdav_policy) " +
+                "VALUES (?, ?, 0, ?, ?, ?, 'work', ?, ?, ?, 'name','asc','front', ?, ?)";
+        executeUpdate(sql, storage.getId(), storage.getPath(), storage.getDriver(),
+                storage.getCacheExpiration(), storage.getCustomCachePolicies(),
+                storage.getAddition(), time, storage.isDisabled() ? 1 : 0, storage.isWebProxy() ? 1 : 0, storage.getWebdavPolicy());
         log.info("[{}] insert {} storage : {}", storage.getId(), storage.getDriver(), storage.getPath());
     }
 
@@ -214,6 +346,44 @@ public class AListLocalService {
             log.warn("execute update failed", e);
             return 0;
         }
+    }
+
+    /**
+     * 参数化执行(JDBC 路径真参数化,防 SQL 注入;NATIVE/CLI 路径转义单引号后渲染为字面量)。
+     */
+    public int executeUpdate(String sql, Object... args) {
+        if (System.getenv("NATIVE") != null && "sqlite3".equals(database)) {
+            return Utils.executeUpdate(renderSql(sql, args));
+        }
+        try {
+            log.debug("executeUpdate: {} args: {}", sql, args);
+            return alistJdbcTemplate.update(sql, args);
+        } catch (Exception e) {
+            log.warn("execute update failed", e);
+            return 0;
+        }
+    }
+
+    /** 把 ? 占位符渲染为 SQL 字面量(字符串单引号转义,数字/布尔直接),仅用于 sqlite3 CLI 路径。 */
+    private static String renderSql(String sql, Object[] args) {
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        for (int j = 0; j < sql.length(); j++) {
+            char c = sql.charAt(j);
+            if (c == '?' && i < args.length) {
+                Object a = args[i++];
+                if (a == null) {
+                    sb.append("NULL");
+                } else if (a instanceof Number || a instanceof Boolean) {
+                    sb.append(a);
+                } else {
+                    sb.append("'").append(String.valueOf(a).replace("'", "''")).append("'");
+                }
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     public boolean existsById(String tableName, long id) {
@@ -231,13 +401,34 @@ public class AListLocalService {
         }
     }
 
+    public int getNextStorageId() {
+        if (System.getenv("NATIVE") != null && "sqlite3".equals(database)) {
+            try {
+                String maxId = Utils.executeQuery("SELECT MAX(ID) FROM x_storages");
+                return Integer.parseInt(maxId) + 1;
+            } catch (Exception e) {
+                log.warn("get next storage id failed", e);
+            }
+        }
+
+        try {
+            Integer result = alistJdbcTemplate.queryForObject("SELECT MAX(ID) FROM x_storages", new Object[]{}, Integer.class);
+            if (result != null) {
+                return result + 1;
+            }
+        } catch (Exception e) {
+            log.warn("get next storage id failed", e);
+        }
+        return 20000;
+    }
+
     public void setToken(Integer accountId, String key, String value) {
         if (StringUtils.isEmpty(value)) {
             log.warn("Token is empty: {} {} ", accountId, key);
             return;
         }
-        String sql = "INSERT INTO x_tokens VALUES('%s','%s',%d,'%s')";
-        executeUpdate(String.format(sql, key, value, accountId, OffsetDateTime.now()));
+        String sql = "INSERT INTO x_tokens VALUES(?,?,?,?)";
+        executeUpdate(sql, key, value, accountId, OffsetDateTime.now());
     }
 
     public void updateToken(Integer accountId, String key, String value) {
@@ -259,8 +450,8 @@ public class AListLocalService {
             ResponseEntity<String> response = restTemplate.exchange("/api/admin/token/update", HttpMethod.POST, entity, String.class);
             log.debug("updateTokenToAList {} response: {}", key, response.getBody());
         } else {
-            String sql = "INSERT INTO x_tokens VALUES('%s','%s',%d,'%s')";
-            executeUpdate(String.format(sql, key, value, accountId, OffsetDateTime.now()));
+            String sql = "INSERT INTO x_tokens VALUES(?,?,?,?)";
+            executeUpdate(sql, key, value, accountId, OffsetDateTime.now());
         }
     }
 

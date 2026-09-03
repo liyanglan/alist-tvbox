@@ -46,6 +46,8 @@ public class IndexFileService {
     }
 
     public Page<String> getIndexContent(Pageable pageable, String siteId, String index) throws IOException {
+        Utils.requireSafePathSegment(siteId);
+        Utils.requireSafePathSegment(index);
         List<String> list = new ArrayList<>();
         Path file = Utils.getIndexPath(siteId, index + ".txt");
         if (!Files.exists(file)) {
@@ -68,6 +70,8 @@ public class IndexFileService {
     }
 
     public void toggleExcluded(String siteId, int index, String indexName) throws IOException {
+        Utils.requireSafePathSegment(siteId);
+        Utils.requireSafePathSegment(indexName);
         if (index < 0) {
             throw new BadRequestException("行数不正确");
         }
@@ -94,8 +98,8 @@ public class IndexFileService {
     }
 
     public FileSystemResource downloadIndexFile(String siteId) throws IOException {
-        File out = new File("/tmp/index.zip");
-        out.createNewFile();
+        File out = Files.createTempFile("index-", ".zip").toFile();
+        out.deleteOnExit();
         try (FileOutputStream fos = new FileOutputStream(out);
              ZipOutputStream zipOut = new ZipOutputStream(fos)) {
             File fileToZip = Utils.getIndexPath(siteId).toFile();
@@ -105,7 +109,9 @@ public class IndexFileService {
     }
 
     public void uploadIndexFile(String siteId, String indexName, MultipartFile file) throws IOException {
-        Path temp = Path.of("/tmp/index.txt");
+        Utils.requireSafePathSegment(siteId);
+        Utils.requireSafePathSegment(indexName);
+        Path temp = Files.createTempFile("index-upload-", ".txt");
         try {
             FileUtils.copyToFile(file.getInputStream(), temp.toFile());
             List<String> lines = Files.readAllLines(temp);
@@ -122,7 +128,7 @@ public class IndexFileService {
             Files.writeString(path, String.join("\n", lines));
             log.info("上传索引文件成功： {}", path);
         } finally {
-            Files.delete(temp);
+            Files.deleteIfExists(temp);
         }
     }
 
@@ -131,6 +137,8 @@ public class IndexFileService {
     }
 
     public void deleteIndexFile(String siteId, String indexName) throws IOException {
+        Utils.requireSafePathSegment(siteId);
+        Utils.requireSafePathSegment(indexName);
         Path path = Utils.getIndexPath(siteId, indexName + ".txt");
         Files.delete(path);
     }
@@ -288,7 +296,7 @@ public class IndexFileService {
         int index = name.lastIndexOf('.');
         if (index > 0) {
             String suffix = name.substring(index + 1).toLowerCase();
-            return appProperties.getFormats().contains(suffix);
+            return appProperties.getFormats().contains(suffix) || "strm".equals(suffix) || "cas".equals(suffix);
         }
         return false;
     }

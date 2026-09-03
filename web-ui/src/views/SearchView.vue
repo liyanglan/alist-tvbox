@@ -1,14 +1,19 @@
 <template>
-  <div class="search">
-    <h2>API地址</h2>
-    <div class="description">
+  <div class="page-container">
+    <div class="page-header">
+      <h1 class="page-title">搜索</h1>
+    </div>
+
+    <div class="page-card">
+    <h3>API地址</h3>
+    <div style="margin-bottom: 16px;">
       <a :href="currentUrl+getPath(type)+'/'+store.token+'?wd=' + keyword"
          target="_blank">{{ currentUrl }}{{ getPath(type) }}/{{ store.token }}?wd={{ keyword }}</a>
     </div>
 
-    <div>
-      <el-input v-model="keyword" @change="search"/>
-      <el-button type="primary" @click="search" :disabled="!keyword">搜索</el-button>
+    <div style="margin-bottom: 16px;">
+      <el-input v-model="keyword" @change="search" style="width: 300px; margin-right: 12px;"/>
+      <el-button type="primary" @click="search" :disabled="!keyword || searching">搜索</el-button>
       <el-button type="primary" @click="showDialog" v-if="store.admin">设置</el-button>
     </div>
 
@@ -19,6 +24,8 @@
         <el-radio label="2" size="large">BiliBili</el-radio>
         <el-radio label="4" size="large">Emby</el-radio>
         <el-radio label="5" size="large">Jellyfin</el-radio>
+        <el-radio label="7" size="large">飞牛影视</el-radio>
+        <el-radio label="8" size="large">电报频道</el-radio>
         <el-radio label="6" size="large">鱼佬盘搜</el-radio>
       </el-radio-group>
     </el-form-item>
@@ -27,10 +34,29 @@
     <span class="divider" v-if="store.admin"></span>
     <a href="/#/tmdb" v-if="store.admin">TMDB电影数据列表</a>
 
-    <el-table v-if="(type==''||type=='1')&&config" :data="config.list" border style="width: 100%">
+    <div class="actions" v-if="type=='6'&&config?.list?.length">
+      <span>{{ filteredPanSouResults.length }}/{{ config.list.length }}条搜索结果</span>
+      <el-select style="width: 100px;margin: 0 12px;" v-model="panSouType">
+        <el-option
+          v-for="item in panSouTypeOptions"
+          :key="item.value"
+          :label="item.label"
+          :value="item.value"
+        />
+      </el-select>
+      <el-button type="primary" :loading="checkingLinks" :disabled="searching || !filteredPanSouResults.length" @click="checkLinks">
+        检测有效性
+      </el-button>
+      <el-button type="success" :loading="checkingLinks" :disabled="searching || !filteredPanSouResults.length" @click="checkLinksConcurrently">
+        并发检测
+      </el-button>
+    </div>
+
+    <div class="table-scroll-wrapper">
+      <el-table v-if="(type==''||type=='1')&&config" :data="config.list" border style="width: 100%; min-width: 800px">
       <el-table-column prop="vod_name" label="名称" width="300">
         <template #default="scope">
-          <a :href="'/#/vod'+scope.row.vod_content" target="_blank">
+          <a :href="getSearchResultHref(scope.row)" target="_blank">
             {{ scope.row.vod_name }}
           </a>
         </template>
@@ -45,27 +71,49 @@
       <el-table-column prop="vod_year" label="年份" width="90"/>
       <el-table-column prop="vod_remarks" label="评分" width="100"/>
     </el-table>
+    </div>
 
-    <el-table v-if="(type=='6')&&config" :data="config.list" border style="width: 100%">
-      <el-table-column prop="vod_name" label="名称">
+    <div class="table-scroll-wrapper">
+      <el-table v-if="(type=='6'||type=='8')&&config" :data="filteredPanSouResults" border style="width: 100%; min-width: 800px" v-loading="searching">
+      <el-table-column prop="vod_name" label="名称" sortable>
         <template #default="scope">
           <a :href="'/#/vod?link='+scope.row.vod_id" target="_blank">
             {{ scope.row.vod_name }}
           </a>
         </template>
       </el-table-column>
-      <el-table-column prop="vod_id" label="链接" width="350">
+      <el-table-column prop="vod_id" label="链接" width="350" sortable>
         <template #default="scope">
           <a :href="decodeURIComponent(scope.row.vod_id)" target="_blank">
-            {{ decodeURIComponent(scope.row.vod_id) }}
+            {{ formatDisplayLink(scope.row.vod_id) }}
           </a>
         </template>
       </el-table-column>
-      <el-table-column prop="vod_remarks" label="类型" width="100"/>
+      <el-table-column prop="vod_remarks" label="类型" width="100" sortable/>
+      <el-table-column prop="vod_play_from" label="来源" width="180" sortable/>
+      <el-table-column prop="vod_time" label="时间" width="180" sortable/>
+      <el-table-column prop="validity_summary" label="有效性" width="180" sortable>
+        <template #default="scope">
+          <el-tag v-if="scope.row.validity_state" :type="getValidityTagType(scope.row.validity_state)">
+            {{ scope.row.validity_summary || scope.row.validity_state }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="140">
+        <template #default="scope">
+          <el-button link type="primary" :disabled="!isCheckSupportedRow(scope.row)" :loading="scope.row.validity_checking" @click="checkLink(scope.row)">
+            检测
+          </el-button>
+          <el-button link type="success" @click="followSearch(scope.row)">
+            追更
+          </el-button>
+        </template>
+      </el-table-column>
     </el-table>
+    </div>
 
-    <h2 v-if="type!='6'">API返回数据</h2>
-    <div class="data" v-if="type!='6'">
+    <h2 v-if="type!='6'&&type!='8'">API返回数据</h2>
+    <div class="data" v-if="type!='6'&&type!='8'">
       <json-viewer :value="config" expanded copyable show-double-quotes :show-array-index="false" :expand-depth=3>
       </json-viewer>
     </div>
@@ -91,18 +139,22 @@
       </template>
     </el-dialog>
 
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import {ref} from 'vue'
+import {computed, ref} from 'vue'
 import axios from "axios"
 import {ElMessage} from "element-plus";
 import {store} from "@/services/store";
 
-const type = ref('1')
-const keyword = ref('')
+const type = ref(localStorage.getItem("search_type") || '1');
+const keyword = ref(localStorage.getItem("search_keyword") || '')
+const panSouType = ref('ALL')
 const config = ref<any>('')
+const searching = ref(false)
+const checkingLinks = ref(false)
 const dialogVisible = ref(false)
 const currentUrl = window.location.origin
 const form = ref({
@@ -122,21 +174,232 @@ const getPath = (type: string) => {
     return '/emby'
   } else if (type == '5') {
     return '/jellyfin'
+  } else if (type == '7') {
+    return '/feiniu'
   } else if (type == '6') {
     return '/pansou'
+  } else if (type == '8') {
+    return '/tgsc'
   } else {
     return '/vod'
   }
 }
 
+const getSearchResultHref = (row: any) => {
+  if (type.value == '') {
+    return '/#/vod?id=' + encodeURIComponent(row.vod_id)
+  }
+  return '/#/vod' + row.vod_content
+}
+
+const diskTypeMap: Record<string, string> = {
+  '百度': 'baidu',
+  '阿里': 'aliyun',
+  '夸克': 'quark',
+  '天翼': 'tianyi',
+  'UC': 'uc',
+  '移动': 'mobile',
+  '115': '115',
+  '迅雷': 'xunlei',
+  '123': '123',
+  '光鸭': 'guangya',
+  '光鸭云盘': 'guangya',
+}
+
+const panSouItems = computed(() => config.value?.list || [])
+
+const panSouTypeOptions = computed(() => {
+  const types = Array.from(new Set(panSouItems.value.map((e: any) => e.vod_remarks).filter((e: string) => e)))
+  return [
+    {label: '全部', value: 'ALL'},
+    ...types.map((type) => ({label: type, value: type})),
+  ]
+})
+
+const filteredPanSouResults = computed(() => {
+  if (panSouType.value == 'ALL') {
+    return panSouItems.value
+  }
+  return panSouItems.value.filter((e: any) => e.vod_remarks == panSouType.value)
+})
+
+const getValidityTagType = (state: string) => {
+  if (state === 'ok') {
+    return 'success'
+  }
+  if (state === 'bad') {
+    return 'danger'
+  }
+  if (state === 'locked') {
+    return 'warning'
+  }
+  return 'info'
+}
+
+const isCheckSupportedRow = (row: any) => {
+  return !!diskTypeMap[row.vod_remarks]
+}
+
+const followingKeys = new Set<string>()
+
+const followSearch = (row: any) => {
+  const link = decodeURIComponent(row.vod_id || '')
+  if (!link.startsWith('http')) {
+    ElMessage.warning('该结果不是网盘分享链接,请在追剧页手动订阅')
+    return
+  }
+  const key = row.vod_name + '|' + link
+  if (followingKeys.has(key)) {
+    return // 提交中防连点;后端 create 同名同季幂等兜底
+  }
+  followingKeys.add(key)
+  axios.post('/api/media-subscriptions/follow', {name: row.vod_name, link: link}).then(() => {
+    ElMessage.success(`已订阅追更「${row.vod_name}」,当前资源直接作为主源,稍后到追剧页查看`)
+  }).finally(() => {
+    followingKeys.delete(key)
+  })
+}
+
+const formatDisplayLink = (vodId: string) => {
+  const link = decodeURIComponent(vodId)
+  if (!link.startsWith('magnet:')) {
+    return link
+  }
+  try {
+    const url = new URL(link)
+    url.searchParams.delete('dn')
+    return url.toString()
+  } catch (e) {
+    return decodeURIComponent(vodId)
+  }
+}
+
 const search = function () {
+  if (searching.value) {
+    return
+  }
+  localStorage.setItem('search_type', type.value)
+  localStorage.setItem('search_keyword', keyword.value.trim())
   if (!keyword.value) {
     return
   }
+  searching.value = true
   config.value = ''
   axios.get(getPath(type.value) + '/' + store.token + '?ac=web&wd=' + keyword.value.trim()).then(({data}) => {
     config.value = data
+    if (type.value == '6' && panSouType.value != 'ALL' && !panSouItems.value.some((e: any) => e.vod_remarks == panSouType.value)) {
+      panSouType.value = 'ALL'
+    }
+  }).finally(() => {
+    searching.value = false
   })
+}
+
+const checkLinks = () => {
+  if (checkingLinks.value || !config.value?.list?.length) {
+    return
+  }
+  const items: any[] = []
+  filteredPanSouResults.value.forEach((row: any) => {
+    const diskType = diskTypeMap[row.vod_remarks]
+    if (!diskType) {
+      return
+    }
+    items.push({
+      disk_type: diskType,
+      url: decodeURIComponent(row.vod_id),
+    })
+  })
+  if (!items.length) {
+    ElMessage.info('没有可检测的链接')
+    return
+  }
+  checkingLinks.value = true
+  checkPanSouItems(items).then((results) => {
+    config.value.list.forEach((row: any) => updateLinkValidity(row, results))
+  }).finally(() => {
+    checkingLinks.value = false
+  })
+}
+
+const checkLinksConcurrently = () => {
+  if (checkingLinks.value || !filteredPanSouResults.value.length) {
+    return
+  }
+  const pending = collectCheckItems()
+  if (!pending.length) {
+    ElMessage.info('没有可检测的链接')
+    return
+  }
+  const chunkSize = 5
+  const chunks = []
+  for (let i = 0; i < pending.length; i += chunkSize) {
+    chunks.push(pending.slice(i, i + chunkSize))
+  }
+  checkingLinks.value = true
+  pending.forEach(e => {
+    e.row.validity_checking = true
+  })
+  Promise.all(chunks.map(chunk => {
+    return checkPanSouItems(chunk.map(e => e.item)).then((results) => {
+      chunk.forEach(e => updateLinkValidity(e.row, results))
+    }).finally(() => {
+      chunk.forEach(e => {
+        e.row.validity_checking = false
+      })
+    })
+  })).finally(() => {
+    checkingLinks.value = false
+  })
+}
+
+const checkLink = (row: any) => {
+  const diskType = diskTypeMap[row.vod_remarks]
+  if (!diskType) {
+    return
+  }
+  row.validity_checking = true
+  checkPanSouItems([{
+    disk_type: diskType,
+    url: decodeURIComponent(row.vod_id),
+  }]).then((results) => {
+    updateLinkValidity(row, results)
+  }).finally(() => {
+    row.validity_checking = false
+  })
+}
+
+const checkPanSouItems = (items: any[]) => {
+  return axios.post('/api/pansou/check/links', {
+    items,
+    view_token: 'pansou-' + Date.now(),
+  }).then(({data}) => new Map((data.results || []).map((e: any) => [e.url, e])))
+}
+
+const collectCheckItems = () => {
+  const pending: any[] = []
+  filteredPanSouResults.value.forEach((row: any) => {
+    const diskType = diskTypeMap[row.vod_remarks]
+    if (!diskType) {
+      return
+    }
+    pending.push({
+      row,
+      item: {
+        disk_type: diskType,
+        url: decodeURIComponent(row.vod_id),
+      },
+    })
+  })
+  return pending
+}
+
+const updateLinkValidity = (row: any, results: Map<any, any>) => {
+  const result: any = results.get(decodeURIComponent(row.vod_id))
+  if (result) {
+    row.validity_state = result.state
+    row.validity_summary = result.summary || result.state
+  }
 }
 
 const showDialog = () => {
@@ -159,6 +422,10 @@ const update = () => {
 <style scoped>
 .description {
   margin-bottom: 12px;
+}
+
+.actions {
+  margin: 12px 0;
 }
 
 .divider {

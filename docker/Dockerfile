@@ -2,18 +2,19 @@ FROM haroldli/alist-base:latest
 
 LABEL MAINTAINER="Har01d"
 
-ENV MEM_OPT="-Xmx512M" ALIST_PORT=5344 INSTALL=new
+ENV MEM_OPT="-Xmx1024M" ALIST_PORT=5344 INSTALL=new
 
 COPY config/alist.json /
 
-COPY scripts/entrypoint.sh /
-COPY scripts/init.sh /
+COPY docker/scripts/ /docker/scripts/
 
 COPY data/tvbox.zip /
-COPY data/base_version /
+COPY data/115.index.zip /
 COPY data/cat.zip /
 COPY data/pg.zip /
 COPY data/zx.zip /
+COPY data/nginx.conf /etc/nginx/http.d/default.conf
+COPY data/base_version /
 
 COPY target/application/ ./
 
@@ -21,6 +22,8 @@ COPY data/version /app_version
 
 EXPOSE 4567 5244
 
-ENTRYPOINT ["/entrypoint.sh"]
+VOLUME ["/www/static"]
+
+ENTRYPOINT ["/docker/scripts/entrypoint.sh"]
 
 CMD ["81", "--spring.profiles.active=production,docker"]

@@ -7,7 +7,7 @@ public final class Constants {
 
     public static final String ACCEPT = "application/json, text/plain, */*";
     public static final String OK_USER_AGENT = "okhttp/3.15";
-    public static final String USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+    public static final String USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
     public static final String EMBY_USER_AGENT = "Yamby/1.5.7.18(Android";
     public static final String JELLYFIN_USER_AGENT = "Jellyfin/2.6.2 (Linux;Android 13) AndroidXMedia3/1.5.1";
     public static final String USER_AGENT1 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppelWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36";
@@ -25,8 +25,11 @@ public final class Constants {
     public static final String FOLDER = "folder";
     public static final String COLLECTION = "collection";
     public static final String LIST = "list";
+    public static final String INDEX_115_NAME = "/115分享索引";
+    /** 追剧订阅固定挂载根路径:此路径下的 share 由订阅服务管理生命周期,失效不删除(自动换源),ShareService 清理豁免 */
+    public static final String SUBSCRIPTION_MOUNT_ROOT = "/追剧/";
 
-    public static final String TG_DRIVERS = "9,10,5,7,8,3,2,0,6,1";
+    public static final String TG_DRIVERS = "9,10,5,7,8,3,2,0,6,1,12,magnet,ed2k";
 
     public static final String ACCESS_TOKEN = "access_token";
     public static final String REFRESH_TOKEN = "refresh_token";
@@ -42,6 +45,8 @@ public final class Constants {
     public static final String ALIST_PASSWORD = "alist_password";
     public static final String ALIST_USERNAME = "alist_username";
     public static final String ALIST_LOGIN = "alist_login";
+    public static final String BASIC_AUTH_USERNAME = "basic_auth_username";
+    public static final String BASIC_AUTH_PASSWORD = "basic_auth_password";
     public static final String SCHEDULE_TIME = "schedule_time";
     public static final String ZONE_ID = "Asia/Shanghai";
     public static final String ALIST_START_TIME = "alist_start_time";
@@ -49,15 +54,19 @@ public final class Constants {
     public static final String MOVIE_VERSION = "movie_version";
     public static final String OPEN_TOKEN_URL = "open_token_url";
     public static final String TOKEN = "token";
+    /** 用户级 vod token 前缀(u-{username}):该前缀保留给用户 token,全局 tokens 禁用,两个空间永不撞车。 */
+    public static final String USER_TOKEN_PREFIX = "u-";
     public static final String ENABLED_TOKEN = "enabled_token";
     public static final String INDEX_VERSION = "index_version";
     public static final String DOCKER_VERSION = "docker_version";
     public static final String APP_VERSION = "app_version";
     public static final String ALIST_VERSION = "alist_version";
     public static final String BILIBILI_COOKIE = "bilibili_cookie";
+    public static final String BILIBILI_TOKEN = "bilibili_token";
     public static final String BILIBILI_CODE = "6666";
     public static final String BILI_BILI = "BiliBili";
     public static final String ALI_SECRET = "ali_secret";
     public static final String TACIT_0924_ID = "tacit0924_id";
     public static final String TACIT_FOLDER_ID = "tacit0924_folder_id";
+    public static final String GLOBAL_SUBSCRIPTION_OVERRIDE = "global_subscription_override";
 }

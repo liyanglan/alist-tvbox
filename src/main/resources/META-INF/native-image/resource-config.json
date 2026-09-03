@@ -5,7 +5,10 @@
       {"pattern": "shares.txt"},
       {"pattern": "115_shares.txt"},
       {"pattern": "channels.json"},
-      {"pattern": "countries.json"}
+      {"pattern": "channels.txt"},
+      {"pattern": "countries.json"},
+      {"pattern": "META-INF/services/org.flywaydb.core.api.migration.JavaMigration"},
+      {"pattern": "db/migration/.*"}
     ]
   }
 }

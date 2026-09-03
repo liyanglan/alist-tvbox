@@ -43,7 +43,15 @@ class AccountService {
   logout() {
     this.account.authenticated = false
     localStorage.removeItem("token")
-    return axios.post("/api/accounts/logout").then()
+    return axios.post("/api/accounts/logout")
+  }
+
+  getSessions() {
+    return axios.get("/api/accounts/sessions").then(({data}) => data)
+  }
+
+  revokeSession(id: number) {
+    return axios.delete(`/api/accounts/sessions/${id}`)
   }
 }
 

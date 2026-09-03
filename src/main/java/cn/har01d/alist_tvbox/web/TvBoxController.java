@@ -3,16 +3,14 @@ package cn.har01d.alist_tvbox.web;
 import cn.har01d.alist_tvbox.dto.TokenDto;
 import cn.har01d.alist_tvbox.entity.Device;
 import cn.har01d.alist_tvbox.entity.DeviceRepository;
-import cn.har01d.alist_tvbox.entity.History;
-import cn.har01d.alist_tvbox.service.HistoryService;
+import cn.har01d.alist_tvbox.service.SettingService;
 import cn.har01d.alist_tvbox.service.SubscriptionService;
 import cn.har01d.alist_tvbox.service.TvBoxService;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -22,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -30,44 +29,44 @@ import java.util.Map;
 public class TvBoxController {
     private final TvBoxService tvBoxService;
     private final SubscriptionService subscriptionService;
-    private final HistoryService historyService;
     private final DeviceRepository deviceRepository;
-    private final ObjectMapper objectMapper;
+    private final SettingService settingService;
 
     public TvBoxController(TvBoxService tvBoxService,
                            SubscriptionService subscriptionService,
-                           HistoryService historyService,
                            DeviceRepository deviceRepository,
-                           ObjectMapper objectMapper) {
+                           SettingService settingService) {
         this.tvBoxService = tvBoxService;
         this.subscriptionService = subscriptionService;
-        this.historyService = historyService;
         this.deviceRepository = deviceRepository;
-        this.objectMapper = objectMapper;
+        this.settingService = settingService;
     }
 
     @GetMapping("/vod1")
     public Object api1(String t, String f, String ids, String ac, String wd, String sort,
                        @RequestParam(required = false, defaultValue = "1") Integer pg,
                        @RequestParam(required = false, defaultValue = "100") Integer size,
+                       @RequestParam(required = false, defaultValue = "0") Integer depth,
                        HttpServletRequest request) {
-        return api("", t, f, ids, ac, wd, sort, pg, size, 0, request);
+        return api("", t, f, ids, ac, wd, sort, pg, size, 0, depth, request);
     }
 
     @GetMapping("/vod1/{token}")
     public Object api1(@PathVariable String token, String t, String f, String ids, String ac, String wd, String sort,
                        @RequestParam(required = false, defaultValue = "1") Integer pg,
                        @RequestParam(required = false, defaultValue = "100") Integer size,
+                       @RequestParam(required = false, defaultValue = "0") Integer depth,
                        HttpServletRequest request) {
-        return api(token, t, f, ids, ac, wd, sort, pg, size, 0, request);
+        return api(token, t, f, ids, ac, wd, sort, pg, size, 0, depth, request);
     }
 
     @GetMapping("/vod")
     public Object api(String t, String f, String ids, String ac, String wd, String sort,
                       @RequestParam(required = false, defaultValue = "1") Integer pg,
                       @RequestParam(required = false, defaultValue = "100") Integer size,
+                      @RequestParam(required = false, defaultValue = "0") Integer depth,
                       HttpServletRequest request) {
-        return api("", t, f, ids, ac, wd, sort, pg, size, 1, request);
+        return api("", t, f, ids, ac, wd, sort, pg, size, 1, depth, request);
     }
 
     @GetMapping("/vod/{token}")
@@ -75,6 +74,7 @@ public class TvBoxController {
                       @RequestParam(required = false, defaultValue = "1") Integer pg,
                       @RequestParam(required = false, defaultValue = "100") Integer size,
                       @RequestParam(required = false, defaultValue = "1") Integer type,
+                      @RequestParam(required = false, defaultValue = "0") Integer depth,
                       HttpServletRequest request) {
         subscriptionService.checkToken(token);
 
@@ -86,7 +86,7 @@ public class TvBoxController {
             } else if (ids.equals("recommend")) {
                 return tvBoxService.recommend(ac, pg);
             }
-            return tvBoxService.getDetail(ac, ids);
+            return tvBoxService.getDetail(ac, ids, depth);
         } else if (t != null && !t.isEmpty()) {
             if (t.equals("0")) {
                 return tvBoxService.recommend(ac, pg);
@@ -121,22 +121,23 @@ public class TvBoxController {
         return tvBoxService.device(request);
     }
 
-    @PostMapping("/tv/action")
-    public void action(@RequestParam("do") String action, String mode, String type, String device, String config, String targets, HttpServletRequest request) throws JsonProcessingException {
-        log.debug("device: {} config: {} history: {}", device, config, targets);
-        if ("sync".equals(action) && "history".equals(type)) {
-            historyService.syncHistory(mode,
-                    device == null ? null : objectMapper.readValue(device, Device.class),
-                    tvBoxService.myDevice(),
-                    config,
-                    objectMapper.readValue(targets, new TypeReference<List<History>>() {
-                    }));
-        }
-    }
-
     @GetMapping("/api/devices")
+    @Transactional(timeout = 5)  // 5秒超时保护
     public List<Device> devices() {
-        return deviceRepository.findAll();
+        long start = System.currentTimeMillis();
+        log.info("📱 开始查询设备列表");
+
+        try {
+            List<Device> result = deviceRepository.findAll();
+            long duration = System.currentTimeMillis() - start;
+
+            log.info("✅ 设备列表查询成功: {} 个, 耗时 {}ms", result.size(), duration);
+            return result;
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - start;
+            log.error("❌ 设备列表查询失败, 耗时 {}ms", duration, e);
+            return Collections.emptyList();
+        }
     }
 
     @PostMapping("/api/devices")
@@ -149,15 +150,9 @@ public class TvBoxController {
         return tvBoxService.scanDevices(request);
     }
 
-    @PostMapping("/devices/{token}/{id}/sync")
-    public void sync(@PathVariable String token, @PathVariable Integer id, int mode, HttpServletRequest request) throws JsonProcessingException {
-        subscriptionService.checkToken(token);
-        historyService.sync(id, tvBoxService.myDevice(), mode);
-    }
-
     @PostMapping("/api/devices/{id}/push")
-    public void push(@PathVariable Integer id, String type, String name, String url, HttpServletRequest request) throws JsonProcessingException {
-        historyService.push(id, type, name, url, tvBoxService.myDevice());
+    public void push(@PathVariable Integer id, String type, String name, String url) throws JsonProcessingException {
+        tvBoxService.push(id, type, name, url);
     }
 
     @DeleteMapping("/api/devices/{id}")
@@ -181,12 +176,12 @@ public class TvBoxController {
     }
 
     @GetMapping("/sub/{id}")
-    public Map<String, Object> subscription(@PathVariable String id) {
-        return subscription("", id);
+    public Map<String, Object> subscription(@PathVariable String id, HttpServletRequest request) {
+        return subscription("", id, request);
     }
 
     @GetMapping("/sub/{token}/{id}")
-    public Map<String, Object> subscription(@PathVariable String token, @PathVariable String id) {
+    public Map<String, Object> subscription(@PathVariable String token, @PathVariable String id, HttpServletRequest request) {
         subscriptionService.checkToken(token);
 
         return subscriptionService.subscription(token, id);
@@ -194,21 +189,29 @@ public class TvBoxController {
 
     @GetMapping("/open")
     public Map<String, Object> open() throws IOException {
-        return open("");
+        return subscriptionService.open();
     }
 
     @GetMapping("/open/{token}")
     public Map<String, Object> open(@PathVariable String token) throws IOException {
         subscriptionService.checkToken(token);
-
         return subscriptionService.open();
     }
 
     @GetMapping("/node/{token}/{file}")
     public String node(@PathVariable String token, @PathVariable String file) throws IOException {
         subscriptionService.checkToken(token);
-
         return subscriptionService.node(file);
+    }
+
+    @GetMapping("/api/basic-auth-credentials")
+    public Map<String, String> getBasicAuthCredentials() {
+        return settingService.getBasicAuthCredentials();
+    }
+
+    @PostMapping("/api/basic-auth-credentials/regenerate")
+    public Map<String, String> regenerateBasicAuthCredentials() {
+        return settingService.regenerateBasicAuthCredentials();
     }
 
     @PostMapping("/api/cat/sync")
@@ -226,5 +229,10 @@ public class TvBoxController {
         subscriptionService.checkToken(token);
 
         return subscriptionService.repository(token, id);
+    }
+
+    @GetMapping("/api/capabilities")
+    public Map<String, Boolean> getCapabilities() {
+        return subscriptionService.getCapabilities();
     }
 }
